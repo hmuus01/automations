@@ -1,0 +1,1686 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VPI Jobs Tracker | BigChange Dashboard</title>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+    
+    <style>
+        :root {
+            /* FRG Brand Colours */
+            --frg-red: #E31837;
+            --frg-orange: #F7941D;
+            --frg-green: #00A651;
+            --frg-green-light: #4DBD74;
+
+            /* Light Theme - Off White */
+            --bg-dark: #f5f5f7;
+            --bg-card: #ffffff;
+            --bg-card-hover: #fafafa;
+            --border: #e0e0e0;
+            --text-primary: #1a1a1a;
+            --text-secondary: #666666;
+            --text-muted: #999999;
+
+            /* Accent colours mapped to FRG */
+            --accent-sent: var(--frg-green);
+            --accent-sent-glow: rgba(0, 166, 81, 0.3);
+            --accent-sent-ai: var(--frg-green);
+            --accent-sent-manual: var(--frg-green-light);
+            --accent-hold: var(--frg-orange);
+            --accent-hold-glow: rgba(247, 148, 29, 0.3);
+            --accent-new: var(--frg-red);
+            --accent-new-glow: rgba(227, 24, 55, 0.3);
+            --accent-other: #2C3E50;  /* Muted navy */
+
+            /* Gradients */
+            --gradient-1: linear-gradient(135deg, var(--frg-green) 0%, var(--frg-green-light) 100%);
+            --gradient-2: linear-gradient(135deg, var(--frg-green) 0%, #00C853 100%);
+            --gradient-3: linear-gradient(135deg, var(--frg-orange) 0%, var(--frg-red) 100%);
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'DM Sans', -apple-system, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+        
+        /* Subtle background pattern with FRG colours */
+        .bg-pattern {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: -1;
+            opacity: 0.6;
+            background-image:
+                radial-gradient(circle at 20% 80%, rgba(227, 24, 55, 0.03) 0%, transparent 50%),
+                radial-gradient(circle at 80% 20%, rgba(0, 166, 81, 0.03) 0%, transparent 50%),
+                radial-gradient(circle at 50% 50%, rgba(247, 148, 29, 0.02) 0%, transparent 70%);
+        }
+        
+        /* Header */
+        .header {
+            padding: 2rem 3rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border);
+            backdrop-filter: blur(10px);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background: rgba(255, 255, 255, 0.95);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+        }
+        
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        
+        .logo-icon {
+            width: 48px;
+            height: 48px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .logo-icon img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+        
+        .logo-text h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+        
+        .logo-text p {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+        }
+        
+        .header-actions {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+        
+        .sync-status {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            background: var(--bg-card);
+            border-radius: 8px;
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+        }
+        
+        .sync-status .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--accent-sent);
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            cursor: pointer;
+            border: none;
+            transition: all 0.2s;
+            font-family: inherit;
+        }
+        
+        .btn-primary {
+            background: var(--frg-green);
+            color: white;
+            box-shadow: 0 4px 15px rgba(0, 166, 81, 0.3);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            background: #00B85C;
+            box-shadow: 0 6px 20px rgba(0, 166, 81, 0.4);
+        }
+        
+        .btn-primary:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .btn-secondary {
+            background: var(--bg-card);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+        }
+        
+        .btn-secondary:hover {
+            background: var(--bg-card-hover);
+        }
+        
+        /* Main Content */
+        .main {
+            padding: 2rem 3rem;
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+        
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+        
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 1.5rem;
+            position: relative;
+            overflow: hidden;
+            transition: all 0.3s;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+        }
+
+        .stat-card:hover {
+            transform: translateY(-4px);
+            border-color: rgba(0, 166, 81, 0.3);
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.08);
+        }
+        
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: var(--card-accent, var(--gradient-1));
+        }
+        
+        .stat-card.sent::before { background: var(--accent-sent); }
+        .stat-card.hold::before { background: var(--accent-hold); }
+        .stat-card.new::before { background: var(--accent-new); }
+        
+        .stat-label {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.5rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        
+        .stat-value {
+            font-size: 2.5rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        
+        .stat-card.sent .stat-value { color: var(--accent-sent); }
+        .stat-card.hold .stat-value { color: var(--accent-hold); }
+        .stat-card.new .stat-value { color: var(--accent-new); }
+        
+        .stat-change {
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+            margin-top: 0.5rem;
+            font-size: 0.875rem;
+        }
+        
+        .stat-change.up { color: var(--accent-sent); }
+        .stat-change.down { color: #ef4444; }
+        
+        /* Charts Section */
+        .charts-section {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+        
+        .chart-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 1.5rem;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+        }
+        
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+        
+        .chart-title {
+            font-size: 1.125rem;
+            font-weight: 600;
+        }
+        
+        .chart-tabs {
+            display: flex;
+            gap: 0.5rem;
+        }
+        
+        .chart-tab {
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            font-size: 0.8125rem;
+            font-weight: 500;
+            cursor: pointer;
+            border: none;
+            background: transparent;
+            color: var(--text-secondary);
+            transition: all 0.2s;
+            font-family: inherit;
+        }
+        
+        .chart-tab.active {
+            background: rgba(0, 166, 81, 0.2);
+            color: var(--frg-green);
+        }
+        
+        .chart-tab:hover:not(.active) {
+            background: var(--bg-card-hover);
+        }
+        
+        .chart-container {
+            height: 300px;
+            position: relative;
+        }
+        
+        /* Breakdown Card */
+        .breakdown-list {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+        
+        .breakdown-item {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        
+        .breakdown-color {
+            width: 12px;
+            height: 12px;
+            border-radius: 3px;
+        }
+        
+        .breakdown-color.sent { background: var(--accent-sent); }
+        .breakdown-color.hold { background: var(--accent-hold); }
+        .breakdown-color.new { background: var(--accent-new); }
+        .breakdown-color.other { background: var(--accent-other); }
+        
+        .breakdown-info {
+            flex: 1;
+        }
+        
+        .breakdown-label {
+            font-size: 0.875rem;
+            font-weight: 500;
+        }
+        
+        .breakdown-bar {
+            height: 6px;
+            background: var(--border);
+            border-radius: 3px;
+            margin-top: 0.5rem;
+            overflow: hidden;
+        }
+        
+        .breakdown-fill {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.5s ease-out;
+        }
+        
+        .breakdown-fill.sent { background: var(--accent-sent); }
+        .breakdown-fill.hold { background: var(--accent-hold); }
+        .breakdown-fill.new { background: var(--accent-new); }
+        .breakdown-fill.other { background: var(--accent-other); }
+        
+        .breakdown-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1rem;
+            font-weight: 600;
+            min-width: 60px;
+            text-align: right;
+        }
+        
+        /* Table Section */
+        .table-section {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+        }
+        
+        .table-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .table-title {
+            font-size: 1.125rem;
+            font-weight: 600;
+        }
+        
+        .table-filters {
+            display: flex;
+            gap: 0.5rem;
+        }
+        
+        .filter-btn {
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            font-size: 0.8125rem;
+            font-weight: 500;
+            cursor: pointer;
+            border: 1px solid var(--border);
+            background: transparent;
+            color: var(--text-secondary);
+            transition: all 0.2s;
+            font-family: inherit;
+        }
+        
+        .filter-btn.active {
+            background: var(--bg-card-hover);
+            color: var(--text-primary);
+            border-color: rgba(0, 166, 81, 0.5);
+        }
+        
+        .table-container {
+            overflow-x: auto;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        th, td {
+            padding: 1rem 1.5rem;
+            text-align: left;
+        }
+        
+        th {
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-secondary);
+            background: #f8f9fa;
+        }
+        
+        tr {
+            border-bottom: 1px solid var(--border);
+        }
+        
+        tr:last-child {
+            border-bottom: none;
+        }
+        
+        tr:hover td {
+            background: var(--bg-card-hover);
+        }
+        
+        td {
+            font-size: 0.875rem;
+        }
+        
+        .job-ref {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 500;
+            color: var(--frg-green);
+        }
+        
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.375rem;
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+        
+        .status-badge.sent {
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--accent-sent);
+        }
+        
+        .status-badge.hold {
+            background: rgba(245, 158, 11, 0.15);
+            color: var(--accent-hold);
+        }
+        
+        .status-badge.new {
+            background: rgba(227, 24, 55, 0.15);
+            color: var(--frg-red);
+        }
+        
+        .status-badge.other {
+            background: rgba(44, 62, 80, 0.12);
+            color: var(--accent-other);
+        }
+
+        .status-badge.sent_ai {
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--accent-sent-ai);
+        }
+
+        .status-badge.sent_manual {
+            background: rgba(20, 184, 166, 0.15);
+            color: var(--accent-sent-manual);
+        }
+
+        /* Date Filter Section */
+        .date-filter-section {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 1.25rem 1.5rem;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+            flex-wrap: wrap;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+        }
+
+        .date-filter-label {
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .date-inputs {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .date-inputs input[type="date"] {
+            padding: 0.5rem 0.75rem;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--bg-card);
+            color: var(--text-primary);
+            font-size: 0.875rem;
+            font-family: inherit;
+        }
+
+        .date-inputs input[type="date"]:focus {
+            outline: none;
+            border-color: var(--frg-green);
+        }
+
+        .date-inputs span {
+            color: var(--text-muted);
+            font-size: 0.875rem;
+        }
+
+        .quick-filters {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .quick-filter-btn {
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            font-size: 0.8125rem;
+            font-weight: 500;
+            cursor: pointer;
+            border: 1px solid var(--border);
+            background: transparent;
+            color: var(--text-secondary);
+            transition: all 0.2s;
+            font-family: inherit;
+        }
+
+        .quick-filter-btn:hover {
+            background: var(--bg-card-hover);
+            border-color: rgba(0, 166, 81, 0.3);
+        }
+
+        .quick-filter-btn.active {
+            background: rgba(0, 166, 81, 0.2);
+            color: var(--frg-green);
+            border-color: rgba(0, 166, 81, 0.4);
+        }
+
+        .filter-actions {
+            display: flex;
+            gap: 0.5rem;
+            margin-left: auto;
+        }
+
+        .btn-sm {
+            padding: 0.5rem 1rem;
+            font-size: 0.8125rem;
+        }
+
+        .active-filter-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            background: rgba(0, 166, 81, 0.15);
+            border: 1px solid rgba(0, 166, 81, 0.3);
+            border-radius: 8px;
+            font-size: 0.875rem;
+            color: var(--frg-green);
+        }
+
+        .active-filter-indicator .clear-btn {
+            background: none;
+            border: none;
+            color: var(--frg-green);
+            cursor: pointer;
+            padding: 0;
+            font-size: 1rem;
+            line-height: 1;
+        }
+
+        .active-filter-indicator .clear-btn:hover {
+            color: var(--frg-green-light);
+        }
+
+        /* AI Rate Card */
+        .ai-rate-card {
+            background: linear-gradient(135deg, rgba(0, 166, 81, 0.08) 0%, rgba(77, 189, 116, 0.05) 100%);
+            border: 1px solid rgba(0, 166, 81, 0.25);
+        }
+
+        .ai-rate-card::before {
+            background: linear-gradient(90deg, var(--frg-green), var(--frg-green-light));
+        }
+
+        .ai-rate-value {
+            color: var(--frg-green);
+        }
+
+        /* Sent breakdown inside card */
+        .sent-breakdown {
+            display: flex;
+            gap: 1rem;
+            margin-top: 0.75rem;
+            padding-top: 0.75rem;
+            border-top: 1px solid var(--border);
+        }
+
+        .sent-breakdown-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.8125rem;
+        }
+
+        .sent-breakdown-item .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .sent-breakdown-item .dot.ai { background: var(--accent-sent-ai); }
+        .sent-breakdown-item .dot.manual { background: var(--accent-sent-manual); }
+
+        .sent-breakdown-item .label {
+            color: var(--text-secondary);
+        }
+
+        .sent-breakdown-item .value {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
+        }
+
+        /* Breakdown colors for AI/Manual */
+        .breakdown-color.sent_ai { background: var(--frg-green); }
+        .breakdown-color.sent_manual { background: var(--frg-green-light); }
+        .breakdown-fill.sent_ai { background: var(--frg-green); }
+        .breakdown-fill.sent_manual { background: var(--frg-green-light); }
+        
+        /* Sync Modal */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(4px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.3s;
+        }
+        
+        .modal-overlay.active {
+            opacity: 1;
+            visibility: visible;
+        }
+        
+        .modal {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 2rem;
+            width: 100%;
+            max-width: 480px;
+            transform: scale(0.95);
+            transition: transform 0.3s;
+        }
+        
+        .modal-overlay.active .modal {
+            transform: scale(1);
+        }
+        
+        .modal h2 {
+            font-size: 1.25rem;
+            margin-bottom: 1rem;
+        }
+        
+        .modal p {
+            color: var(--text-secondary);
+            margin-bottom: 1.5rem;
+        }
+        
+        .form-group {
+            margin-bottom: 1rem;
+        }
+        
+        .form-group label {
+            display: block;
+            font-size: 0.875rem;
+            font-weight: 500;
+            margin-bottom: 0.5rem;
+        }
+        
+        .form-group input {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--bg-card);
+            color: var(--text-primary);
+            font-size: 0.875rem;
+            font-family: inherit;
+        }
+        
+        .form-group input:focus {
+            outline: none;
+            border-color: var(--frg-green);
+        }
+        
+        .modal-actions {
+            display: flex;
+            gap: 1rem;
+            justify-content: flex-end;
+            margin-top: 1.5rem;
+        }
+        
+        /* Loading State */
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 200px;
+            color: var(--text-secondary);
+        }
+        
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid var(--border);
+            border-top-color: var(--frg-green);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        /* Alert */
+        .alert {
+            padding: 1rem 1.5rem;
+            border-radius: 8px;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+        
+        .alert.warning {
+            background: rgba(245, 158, 11, 0.1);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+            color: var(--accent-hold);
+        }
+        
+        .alert.success {
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            color: var(--accent-sent);
+        }
+        
+        /* Responsive */
+        @media (max-width: 1400px) {
+            .stats-grid {
+                grid-template-columns: repeat(3, 1fr) !important;
+            }
+        }
+
+        @media (max-width: 1200px) {
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr) !important;
+            }
+            .charts-section {
+                grid-template-columns: 1fr;
+            }
+            .date-filter-section {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            .filter-actions {
+                margin-left: 0;
+                margin-top: 0.5rem;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .header {
+                flex-direction: column;
+                gap: 1rem;
+                padding: 1rem;
+            }
+            .main {
+                padding: 1rem;
+            }
+            .stats-grid {
+                grid-template-columns: 1fr !important;
+            }
+            .date-inputs {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            .quick-filters {
+                flex-wrap: wrap;
+            }
+            .table-filters {
+                flex-wrap: wrap;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="bg-pattern"></div>
+    
+    <header class="header">
+        <div class="logo">
+            <div class="logo-icon">
+                <img src="frg-logo.png" alt="FRG Logo">
+            </div>
+            <div class="logo-text">
+                <h1>VPI Jobs Tracker</h1>
+                <p>First Response Group</p>
+            </div>
+        </div>
+        <div class="header-actions">
+            <div class="sync-status">
+                <span class="dot"></span>
+                <span id="sync-time">Last sync: Never</span>
+            </div>
+            <button class="btn btn-secondary" onclick="exportData()">Export CSV</button>
+            <button class="btn btn-primary" onclick="openSyncModal()">
+                <span>↻</span> Sync Now
+            </button>
+        </div>
+    </header>
+    
+    <main class="main">
+        <!-- Alert for missing credentials -->
+        <div id="credentials-alert" class="alert warning" style="display: none;">
+            <span>⚠️</span>
+            <span>BigChange credentials not configured. Set environment variables to enable sync.</span>
+        </div>
+
+        <!-- Date Range Filter -->
+        <div class="date-filter-section">
+            <span class="date-filter-label">Filter by Date</span>
+
+            <div class="date-inputs">
+                <input type="date" id="filter-start" title="Start Date">
+                <span>to</span>
+                <input type="date" id="filter-end" title="End Date">
+            </div>
+
+            <div class="quick-filters">
+                <button class="quick-filter-btn" data-range="today" onclick="applyQuickFilter('today')">Today</button>
+                <button class="quick-filter-btn" data-range="last7" onclick="applyQuickFilter('last7')">Last 7 Days</button>
+                <button class="quick-filter-btn" data-range="thisWeek" onclick="applyQuickFilter('thisWeek')">This Week</button>
+                <button class="quick-filter-btn" data-range="thisMonth" onclick="applyQuickFilter('thisMonth')">This Month</button>
+            </div>
+
+            <div class="filter-actions">
+                <button class="btn btn-primary btn-sm" onclick="applyDateFilter()">Apply Filter</button>
+                <button class="btn btn-secondary btn-sm" onclick="resetDateFilter()">Reset</button>
+            </div>
+
+            <div id="active-filter" class="active-filter-indicator" style="display: none;">
+                <span id="filter-text">Showing: All Data</span>
+                <button class="clear-btn" onclick="resetDateFilter()" title="Clear filter">×</button>
+            </div>
+        </div>
+
+        <!-- Stats Cards -->
+        <div class="stats-grid" style="grid-template-columns: repeat(5, 1fr);">
+            <div class="stat-card">
+                <div class="stat-label">Total VPI Jobs</div>
+                <div class="stat-value" id="stat-total">-</div>
+                <div class="stat-change up" id="stat-total-change"></div>
+            </div>
+            <div class="stat-card sent">
+                <div class="stat-label">Total Sent</div>
+                <div class="stat-value" id="stat-sent">-</div>
+                <div class="stat-change" id="stat-sent-pct"></div>
+                <div class="sent-breakdown">
+                    <div class="sent-breakdown-item">
+                        <span class="dot ai"></span>
+                        <span class="label">AI:</span>
+                        <span class="value" id="stat-sent-ai">-</span>
+                    </div>
+                    <div class="sent-breakdown-item">
+                        <span class="dot manual"></span>
+                        <span class="label">Manual:</span>
+                        <span class="value" id="stat-sent-manual">-</span>
+                    </div>
+                </div>
+            </div>
+            <div class="stat-card ai-rate-card">
+                <div class="stat-label">AI Automation Rate</div>
+                <div class="stat-value ai-rate-value" id="stat-ai-rate">-</div>
+                <div class="stat-change" id="stat-ai-rate-desc">of sent reports</div>
+            </div>
+            <div class="stat-card hold">
+                <div class="stat-label">On Hold</div>
+                <div class="stat-value" id="stat-hold">-</div>
+                <div class="stat-change" id="stat-hold-pct"></div>
+            </div>
+            <div class="stat-card new">
+                <div class="stat-label">New / Pending</div>
+                <div class="stat-value" id="stat-new">-</div>
+                <div class="stat-change" id="stat-new-pct"></div>
+            </div>
+        </div>
+        
+        <!-- Charts -->
+        <div class="charts-section">
+            <div class="chart-card">
+                <div class="chart-header">
+                    <h3 class="chart-title">Jobs Over Time</h3>
+                    <div class="chart-tabs">
+                        <button class="chart-tab active" data-view="daily" onclick="changeChartView('daily')">Daily</button>
+                        <button class="chart-tab" data-view="weekly" onclick="changeChartView('weekly')">Weekly</button>
+                        <button class="chart-tab" data-view="monthly" onclick="changeChartView('monthly')">Monthly</button>
+                    </div>
+                </div>
+                <div class="chart-container">
+                    <canvas id="trendChart"></canvas>
+                </div>
+            </div>
+            
+            <div class="chart-card">
+                <div class="chart-header">
+                    <h3 class="chart-title">Flag Breakdown</h3>
+                </div>
+                <div class="breakdown-list" id="breakdown-list">
+                    <!-- Filled by JS -->
+                </div>
+                <div class="chart-container" style="height: 200px; margin-top: 1rem;">
+                    <canvas id="pieChart"></canvas>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Jobs Table -->
+        <div class="table-section">
+            <div class="table-header">
+                <h3 class="table-title">Recent Jobs</h3>
+                <div class="table-filters">
+                    <button class="filter-btn active" data-filter="all" onclick="filterJobs('all')">All</button>
+                    <button class="filter-btn" data-filter="Sent" onclick="filterJobs('Sent')">All Sent</button>
+                    <button class="filter-btn" data-filter="Sent_AI" onclick="filterJobs('Sent_AI')">Sent (AI)</button>
+                    <button class="filter-btn" data-filter="Sent_Manual" onclick="filterJobs('Sent_Manual')">Sent (Manual)</button>
+                    <button class="filter-btn" data-filter="Hold" onclick="filterJobs('Hold')">Hold</button>
+                    <button class="filter-btn" data-filter="New" onclick="filterJobs('New')">New</button>
+                </div>
+            </div>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Job Ref</th>
+                            <th>Contact</th>
+                            <th>Resource</th>
+                            <th>Status</th>
+                            <th>Flag</th>
+                            <th>Created Date</th>
+                        </tr>
+                    </thead>
+                    <tbody id="jobs-table">
+                        <!-- Filled by JS -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+    
+    <!-- Sync Modal -->
+    <div class="modal-overlay" id="sync-modal">
+        <div class="modal">
+            <h2>Sync Jobs from BigChange</h2>
+            <p>Pull the latest VPI jobs from the BigChange API.</p>
+            
+            <div class="form-group">
+                <label>Start Date</label>
+                <input type="date" id="sync-start" value="">
+            </div>
+            <div class="form-group">
+                <label>End Date</label>
+                <input type="date" id="sync-end" value="">
+            </div>
+            
+            <div id="sync-result" style="display: none;"></div>
+            
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeSyncModal()">Cancel</button>
+                <button class="btn btn-primary" id="sync-btn" onclick="runSync()">Start Sync</button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // ============================================================
+        // STATE
+        // ============================================================
+        let trendChart = null;
+        let pieChart = null;
+        let currentView = 'daily';
+        let allJobs = [];
+        let stats = {};
+        let dateFilter = { start: null, end: null };
+        let currentJobFilter = 'all';
+
+        // ============================================================
+        // INITIALIZATION
+        // ============================================================
+        document.addEventListener('DOMContentLoaded', () => {
+            // Set default dates for sync modal
+            const today = new Date();
+            const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+            document.getElementById('sync-start').value = formatDate(startOfMonth);
+            document.getElementById('sync-end').value = formatDate(today);
+
+            // Set default dates for filter (today)
+            document.getElementById('filter-start').value = formatDate(today);
+            document.getElementById('filter-end').value = formatDate(today);
+
+            // Check URL for date filter params
+            loadDateFilterFromURL();
+
+            // Load data
+            loadDashboard();
+        });
+
+        // ============================================================
+        // URL STATE MANAGEMENT
+        // ============================================================
+        function loadDateFilterFromURL() {
+            const params = new URLSearchParams(window.location.search);
+            const start = params.get('start');
+            const end = params.get('end');
+
+            if (start || end) {
+                dateFilter.start = start;
+                dateFilter.end = end;
+
+                if (start) document.getElementById('filter-start').value = start;
+                if (end) document.getElementById('filter-end').value = end;
+
+                updateFilterIndicator();
+                highlightActiveQuickFilter();
+            }
+        }
+
+        function updateURLState() {
+            const params = new URLSearchParams();
+            if (dateFilter.start) params.set('start', dateFilter.start);
+            if (dateFilter.end) params.set('end', dateFilter.end);
+
+            const newURL = params.toString()
+                ? `${window.location.pathname}?${params.toString()}`
+                : window.location.pathname;
+
+            window.history.replaceState({}, '', newURL);
+        }
+
+        function updateFilterIndicator() {
+            const indicator = document.getElementById('active-filter');
+            const text = document.getElementById('filter-text');
+
+            if (dateFilter.start || dateFilter.end) {
+                indicator.style.display = 'flex';
+
+                if (dateFilter.start === dateFilter.end) {
+                    text.textContent = `Showing: ${formatDisplayDate(dateFilter.start)}`;
+                } else {
+                    const startStr = dateFilter.start ? formatDisplayDate(dateFilter.start) : 'Start';
+                    const endStr = dateFilter.end ? formatDisplayDate(dateFilter.end) : 'Now';
+                    text.textContent = `Showing: ${startStr} - ${endStr}`;
+                }
+            } else {
+                indicator.style.display = 'none';
+            }
+        }
+
+        function formatDisplayDate(dateStr) {
+            if (!dateStr) return '';
+            const d = new Date(dateStr);
+            return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+        }
+
+        function highlightActiveQuickFilter() {
+            const today = formatDate(new Date());
+            const quickBtns = document.querySelectorAll('.quick-filter-btn');
+
+            quickBtns.forEach(btn => btn.classList.remove('active'));
+
+            // Check which quick filter matches
+            if (dateFilter.start === today && dateFilter.end === today) {
+                document.querySelector('[data-range="today"]')?.classList.add('active');
+            } else if (isLast7Days()) {
+                document.querySelector('[data-range="last7"]')?.classList.add('active');
+            } else if (isThisWeek()) {
+                document.querySelector('[data-range="thisWeek"]')?.classList.add('active');
+            } else if (isThisMonth()) {
+                document.querySelector('[data-range="thisMonth"]')?.classList.add('active');
+            }
+        }
+
+        function isLast7Days() {
+            const today = new Date();
+            const last7 = new Date(today);
+            last7.setDate(last7.getDate() - 6);
+            return dateFilter.start === formatDate(last7) && dateFilter.end === formatDate(today);
+        }
+
+        function isThisWeek() {
+            const today = new Date();
+            const day = today.getDay();
+            const monday = new Date(today);
+            monday.setDate(today.getDate() - (day === 0 ? 6 : day - 1));
+            return dateFilter.start === formatDate(monday) && dateFilter.end === formatDate(today);
+        }
+
+        function isThisMonth() {
+            const today = new Date();
+            const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+            return dateFilter.start === formatDate(startOfMonth) && dateFilter.end === formatDate(today);
+        }
+
+        // ============================================================
+        // DATE FILTER ACTIONS
+        // ============================================================
+        function applyDateFilter() {
+            dateFilter.start = document.getElementById('filter-start').value;
+            dateFilter.end = document.getElementById('filter-end').value;
+
+            updateURLState();
+            updateFilterIndicator();
+            highlightActiveQuickFilter();
+            loadDashboard();
+        }
+
+        function applyQuickFilter(range) {
+            const today = new Date();
+            let start, end;
+
+            switch (range) {
+                case 'today':
+                    start = end = formatDate(today);
+                    break;
+                case 'last7':
+                    end = formatDate(today);
+                    const last7 = new Date(today);
+                    last7.setDate(last7.getDate() - 6);
+                    start = formatDate(last7);
+                    break;
+                case 'thisWeek':
+                    end = formatDate(today);
+                    const day = today.getDay();
+                    const monday = new Date(today);
+                    monday.setDate(today.getDate() - (day === 0 ? 6 : day - 1));
+                    start = formatDate(monday);
+                    break;
+                case 'thisMonth':
+                    end = formatDate(today);
+                    start = formatDate(new Date(today.getFullYear(), today.getMonth(), 1));
+                    break;
+            }
+
+            document.getElementById('filter-start').value = start;
+            document.getElementById('filter-end').value = end;
+            dateFilter.start = start;
+            dateFilter.end = end;
+
+            updateURLState();
+            updateFilterIndicator();
+            highlightActiveQuickFilter();
+            loadDashboard();
+        }
+
+        function resetDateFilter() {
+            dateFilter.start = null;
+            dateFilter.end = null;
+
+            document.getElementById('filter-start').value = formatDate(new Date());
+            document.getElementById('filter-end').value = formatDate(new Date());
+
+            document.querySelectorAll('.quick-filter-btn').forEach(btn => btn.classList.remove('active'));
+
+            updateURLState();
+            updateFilterIndicator();
+            loadDashboard();
+        }
+        
+        async function loadDashboard() {
+            await Promise.all([
+                loadStats(),
+                loadChartData(currentView),
+                loadJobs(currentJobFilter)
+            ]);
+            checkCredentials();
+        }
+
+        // ============================================================
+        // API CALLS
+        // ============================================================
+        function buildDateParams() {
+            const params = new URLSearchParams();
+            if (dateFilter.start) params.set('start', dateFilter.start);
+            if (dateFilter.end) params.set('end', dateFilter.end);
+            return params.toString();
+        }
+
+        async function loadStats() {
+            try {
+                let url = '/api/stats';
+                const dateParams = buildDateParams();
+                if (dateParams) url += '?' + dateParams;
+
+                const res = await fetch(url);
+                stats = await res.json();
+
+                document.getElementById('stat-total').textContent = formatNumber(stats.total_jobs);
+                document.getElementById('stat-sent').textContent = formatNumber(stats.by_flag?.Sent || 0);
+                document.getElementById('stat-sent-ai').textContent = formatNumber(stats.by_flag?.Sent_AI || 0);
+                document.getElementById('stat-sent-manual').textContent = formatNumber(stats.by_flag?.Sent_Manual || 0);
+                document.getElementById('stat-hold').textContent = formatNumber(stats.by_flag?.Hold || 0);
+                document.getElementById('stat-new').textContent = formatNumber(stats.by_flag?.New || 0);
+
+                // AI Automation Rate
+                document.getElementById('stat-ai-rate').textContent = `${stats.ai_automation_rate || 0}%`;
+
+                // Percentages
+                const total = stats.total_jobs || 1;
+                document.getElementById('stat-sent-pct').textContent =
+                    `${((stats.by_flag?.Sent || 0) / total * 100).toFixed(1)}% of total`;
+                document.getElementById('stat-hold-pct').textContent =
+                    `${((stats.by_flag?.Hold || 0) / total * 100).toFixed(1)}% of total`;
+                document.getElementById('stat-new-pct').textContent =
+                    `${((stats.by_flag?.New || 0) / total * 100).toFixed(1)}% of total`;
+
+                // Sync time
+                if (stats.last_sync?.time) {
+                    document.getElementById('sync-time').textContent =
+                        `Last sync: ${new Date(stats.last_sync.time).toLocaleString()}`;
+                }
+
+                // Update breakdown
+                updateBreakdown(stats.by_flag);
+                updatePieChart(stats.by_flag);
+
+            } catch (err) {
+                console.error('Failed to load stats:', err);
+            }
+        }
+
+        async function loadChartData(view) {
+            try {
+                let url = `/api/${view}`;
+                const dateParams = buildDateParams();
+                if (dateParams) url += '?' + dateParams;
+
+                const res = await fetch(url);
+                const data = await res.json();
+                updateTrendChart(data, view);
+            } catch (err) {
+                console.error('Failed to load chart data:', err);
+            }
+        }
+
+        async function loadJobs(filter = 'all') {
+            try {
+                let url = '/api/jobs?limit=50';
+                if (filter !== 'all') {
+                    url += `&flag=${filter}`;
+                }
+                const dateParams = buildDateParams();
+                if (dateParams) url += '&' + dateParams;
+
+                const res = await fetch(url);
+                allJobs = await res.json();
+                renderJobsTable(allJobs);
+            } catch (err) {
+                console.error('Failed to load jobs:', err);
+            }
+        }
+        
+        async function checkCredentials() {
+            try {
+                const res = await fetch('/api/config');
+                const config = await res.json();
+                
+                if (!config.has_credentials) {
+                    document.getElementById('credentials-alert').style.display = 'flex';
+                }
+            } catch (err) {
+                console.error('Failed to check config:', err);
+            }
+        }
+        
+        // ============================================================
+        // CHARTS
+        // ============================================================
+        function updateTrendChart(data, view) {
+            const ctx = document.getElementById('trendChart').getContext('2d');
+
+            if (trendChart) {
+                trendChart.destroy();
+            }
+
+            const labels = data.map(d => d.status_date || d.week_start || d.month_start);
+
+            trendChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'Sent (AI)',
+                            data: data.map(d => d.sent_ai_count || 0),
+                            backgroundColor: '#00A651',  // FRG Green
+                            borderRadius: 4,
+                            stack: 'stack1'
+                        },
+                        {
+                            label: 'Sent (Manual)',
+                            data: data.map(d => d.sent_manual_count || 0),
+                            backgroundColor: '#4DBD74',  // FRG Light Green
+                            borderRadius: 4,
+                            stack: 'stack1'
+                        },
+                        {
+                            label: 'Hold',
+                            data: data.map(d => d.hold_count),
+                            backgroundColor: '#F7941D',  // FRG Orange
+                            borderRadius: 4,
+                            stack: 'stack1'
+                        },
+                        {
+                            label: 'New',
+                            data: data.map(d => d.new_count),
+                            backgroundColor: '#E31837',  // FRG Red
+                            borderRadius: 4,
+                            stack: 'stack1'
+                        },
+                        {
+                            label: 'Other',
+                            data: data.map(d => d.other_count),
+                            backgroundColor: '#2C3E50',  // Muted navy
+                            borderRadius: 4,
+                            stack: 'stack1'
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'bottom',
+                            labels: {
+                                color: '#666666',
+                                padding: 20,
+                                usePointStyle: true
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            stacked: true,
+                            grid: {
+                                color: 'rgba(0, 0, 0, 0.06)'
+                            },
+                            ticks: {
+                                color: '#666666'
+                            }
+                        },
+                        y: {
+                            stacked: true,
+                            grid: {
+                                color: 'rgba(0, 0, 0, 0.06)'
+                            },
+                            ticks: {
+                                color: '#666666'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        
+        function updatePieChart(byFlag) {
+            const ctx = document.getElementById('pieChart').getContext('2d');
+
+            if (pieChart) {
+                pieChart.destroy();
+            }
+
+            const data = [
+                byFlag?.Sent_AI || 0,
+                byFlag?.Sent_Manual || 0,
+                byFlag?.Hold || 0,
+                byFlag?.New || 0,
+                byFlag?.Other || 0
+            ];
+
+            pieChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Sent (AI)', 'Sent (Manual)', 'Hold', 'New', 'Other'],
+                    datasets: [{
+                        data: data,
+                        backgroundColor: [
+                            '#00A651',  // FRG Green
+                            '#4DBD74',  // FRG Light Green
+                            '#F7941D',  // FRG Orange
+                            '#E31837',  // FRG Red
+                            '#2C3E50'   // Muted navy
+                        ],
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: '65%',
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    }
+                }
+            });
+        }
+        
+        function updateBreakdown(byFlag) {
+            // Calculate total excluding combined Sent (to avoid double counting)
+            const total = (byFlag?.Sent_AI || 0) + (byFlag?.Sent_Manual || 0) +
+                          (byFlag?.Hold || 0) + (byFlag?.New || 0) + (byFlag?.Other || 0) || 1;
+            const container = document.getElementById('breakdown-list');
+
+            const categories = [
+                { key: 'Sent_AI', label: 'Sent (AI)', class: 'sent_ai' },
+                { key: 'Sent_Manual', label: 'Sent (Manual)', class: 'sent_manual' },
+                { key: 'Hold', label: 'On Hold', class: 'hold' },
+                { key: 'New', label: 'New / Pending', class: 'new' },
+                { key: 'Other', label: 'Other', class: 'other' }
+            ];
+
+            container.innerHTML = categories.map(cat => {
+                const count = byFlag?.[cat.key] || 0;
+                const pct = (count / total * 100).toFixed(1);
+                return `
+                    <div class="breakdown-item">
+                        <div class="breakdown-color ${cat.class}"></div>
+                        <div class="breakdown-info">
+                            <div class="breakdown-label">${cat.label}</div>
+                            <div class="breakdown-bar">
+                                <div class="breakdown-fill ${cat.class}" style="width: ${pct}%"></div>
+                            </div>
+                        </div>
+                        <div class="breakdown-value">${formatNumber(count)}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        // ============================================================
+        // TABLE
+        // ============================================================
+        function renderJobsTable(jobs) {
+            const tbody = document.getElementById('jobs-table');
+
+            if (!jobs.length) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="6" style="text-align: center; color: var(--text-secondary); padding: 3rem;">
+                            No jobs found. Click "Sync Now" to fetch data from BigChange.
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            tbody.innerHTML = jobs.map(job => {
+                const flagCategory = job.flag_category || '';
+                let badgeClass = flagCategory.toLowerCase();
+                let badgeText = flagCategory;
+
+                // Display friendly names for Sent categories
+                if (flagCategory === 'Sent_AI') {
+                    badgeText = 'SENT (AI)';
+                } else if (flagCategory === 'Sent_Manual') {
+                    badgeText = 'SENT (MANUAL)';
+                } else if (flagCategory === 'Hold') {
+                    badgeText = 'HOLD';
+                } else if (flagCategory === 'New') {
+                    badgeText = 'NEW';
+                } else if (flagCategory === 'Other') {
+                    badgeText = 'OTHER';
+                }
+
+                return `
+                    <tr>
+                        <td><span class="job-ref">${job.job_ref || '-'}</span></td>
+                        <td>${truncate(job.contact || '-', 40)}</td>
+                        <td>${job.resource || '-'}</td>
+                        <td>${job.status || '-'}</td>
+                        <td><span class="status-badge ${badgeClass}">${badgeText}</span></td>
+                        <td>${formatDateTime(job.created)}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+        
+        // ============================================================
+        // ACTIONS
+        // ============================================================
+        function changeChartView(view) {
+            currentView = view;
+
+            // Update tabs
+            document.querySelectorAll('.chart-tab').forEach(tab => {
+                tab.classList.toggle('active', tab.dataset.view === view);
+            });
+
+            loadChartData(view);
+        }
+
+        // Refresh dashboard after sync
+        function refreshAfterSync() {
+            loadDashboard();
+        }
+        
+        function filterJobs(filter) {
+            currentJobFilter = filter;
+
+            // Update buttons
+            document.querySelectorAll('.filter-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.filter === filter);
+            });
+
+            loadJobs(filter);
+        }
+        
+        function openSyncModal() {
+            document.getElementById('sync-modal').classList.add('active');
+            document.getElementById('sync-result').style.display = 'none';
+        }
+        
+        function closeSyncModal() {
+            document.getElementById('sync-modal').classList.remove('active');
+        }
+        
+        async function runSync() {
+            const startDate = document.getElementById('sync-start').value;
+            const endDate = document.getElementById('sync-end').value;
+            const resultEl = document.getElementById('sync-result');
+            const btn = document.getElementById('sync-btn');
+            
+            btn.disabled = true;
+            btn.textContent = 'Syncing...';
+            resultEl.style.display = 'none';
+            
+            try {
+                const res = await fetch('/api/sync', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ start: startDate, end: endDate })
+                });
+                
+                const data = await res.json();
+                
+                if (data.success) {
+                    resultEl.className = 'alert success';
+                    resultEl.innerHTML = `
+                        <span>✓</span>
+                        <span>Synced ${data.jobs_fetched} jobs (${data.inserted} new, ${data.updated} updated)</span>
+                    `;
+                    
+                    // Reload dashboard
+                    loadDashboard();
+                } else {
+                    resultEl.className = 'alert warning';
+                    resultEl.innerHTML = `
+                        <span>⚠️</span>
+                        <span>${data.error || 'Sync failed'}</span>
+                    `;
+                }
+                
+                resultEl.style.display = 'flex';
+                
+            } catch (err) {
+                resultEl.className = 'alert warning';
+                resultEl.innerHTML = `
+                    <span>⚠️</span>
+                    <span>Error: ${err.message}</span>
+                `;
+                resultEl.style.display = 'flex';
+            }
+            
+            btn.disabled = false;
+            btn.textContent = 'Start Sync';
+        }
+        
+        function exportData() {
+            window.open('/api/jobs?limit=10000', '_blank');
+        }
+        
+        // ============================================================
+        // UTILITIES
+        // ============================================================
+        function formatNumber(num) {
+            return (num || 0).toLocaleString();
+        }
+        
+        function formatDate(date) {
+            return date.toISOString().split('T')[0];
+        }
+        
+        function formatDateTime(str) {
+            if (!str) return '-';
+            const d = new Date(str);
+            return d.toLocaleDateString('en-GB') + ' ' + d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+        }
+        
+        function truncate(str, len) {
+            if (!str) return '';
+            return str.length > len ? str.substring(0, len) + '...' : str;
+        }
+    </script>
+</body>
+</html>
