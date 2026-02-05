@@ -536,6 +536,11 @@ def index():
     """Serve the dashboard."""
     return send_from_directory('.', 'index.html')
 
+@app.route('/frg-logo.png')
+def logo():
+    """Serve the logo."""
+    return send_from_directory('.', 'frg-logo.png')
+
 @app.route('/api/stats')
 def get_stats():
     """Get overall statistics with optional date filtering."""
@@ -585,8 +590,10 @@ def get_stats():
         'Other': by_flag_raw.get('Other', 0)
     }
 
-    # AI Automation Rate
-    ai_rate = (sent_ai / total_sent * 100) if total_sent > 0 else 0
+    # AI Automation Rate (of processed reports: AI + Manual + Hold)
+    hold = by_flag.get('Hold', 0)
+    processed = sent_ai + sent_manual + hold
+    ai_rate = (sent_ai / processed * 100) if processed > 0 else 0
 
     # By status
     cursor.execute(f"""
