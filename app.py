@@ -29,8 +29,10 @@ from functools import wraps
 import requests
 from requests.auth import HTTPBasicAuth
 
-from flask import Flask, jsonify, request, send_from_directory, render_template_string
+from flask import Flask, jsonify, request, send_from_directory, render_template_string, redirect, url_for
 from flask_cors import CORS
+from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
+from werkzeug.security import generate_password_hash, check_password_hash
 
 # ============================================================================
 # CONFIGURATION
@@ -100,7 +102,221 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 app = Flask(__name__, static_folder='static')
+app.secret_key = os.environ.get("SECRET_KEY", "dev-change-me-in-production")
 CORS(app)
+
+# ============================================================================
+# AUTHENTICATION
+# ============================================================================
+
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = "login"
+
+
+class User(UserMixin):
+    """User model backed by SQLite."""
+
+    def __init__(self, id, email, password_hash, name):
+        self.id = id
+        self.email = email
+        self.password_hash = password_hash
+        self.name = name
+
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
+
+    @staticmethod
+    def get_by_id(user_id):
+        conn = get_db()
+        row = conn.execute("SELECT id, email, password_hash, name FROM users WHERE id = ?", (user_id,)).fetchone()
+        conn.close()
+        if row:
+            return User(row[0], row[1], row[2], row[3])
+        return None
+
+    @staticmethod
+    def get_by_email(email):
+        conn = get_db()
+        row = conn.execute("SELECT id, email, password_hash, name FROM users WHERE email = ?", (email,)).fetchone()
+        conn.close()
+        if row:
+            return User(row[0], row[1], row[2], row[3])
+        return None
+
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User.get_by_id(int(user_id))
+
+
+@login_manager.unauthorized_handler
+def unauthorized():
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "Authentication required"}), 401
+    return redirect(url_for("login"))
+
+
+LOGIN_PAGE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login | FRG Automations</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'DM Sans', -apple-system, sans-serif;
+            background: #f5f5f7;
+            color: #1a1a1a;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        .bg-pattern {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 0;
+            opacity: 0.6;
+            background-image:
+                radial-gradient(circle at 20% 80%, rgba(227, 24, 55, 0.03) 0%, transparent 50%),
+                radial-gradient(circle at 80% 20%, rgba(0, 166, 81, 0.03) 0%, transparent 50%),
+                radial-gradient(circle at 50% 50%, rgba(247, 148, 29, 0.02) 0%, transparent 70%);
+        }
+
+        .login-card {
+            position: relative; z-index: 1;
+            background: #ffffff;
+            border: 1px solid #e0e0e0;
+            border-radius: 16px;
+            padding: 48px 40px;
+            width: 100%; max-width: 420px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.06);
+        }
+
+        .logo-row {
+            display: flex; align-items: center; justify-content: center; gap: 12px;
+            margin-bottom: 8px;
+        }
+        .logo-row img { height: 40px; }
+        .logo-row span {
+            font-size: 1.25rem; font-weight: 700; color: #1a1a1a;
+            letter-spacing: -0.02em;
+        }
+
+        .subtitle {
+            text-align: center; color: #999999; font-size: 0.85rem;
+            margin-bottom: 32px;
+        }
+
+        label {
+            display: block; font-weight: 600; font-size: 0.8rem;
+            color: #666666; margin-bottom: 6px;
+            text-transform: uppercase; letter-spacing: 0.04em;
+        }
+
+        input[type="email"],
+        input[type="password"] {
+            width: 100%; padding: 12px 14px;
+            background: #f5f5f7;
+            border: 1px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 0.95rem; font-family: inherit;
+            color: #1a1a1a;
+            margin-bottom: 20px;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        input::placeholder { color: #999999; }
+        input:focus {
+            outline: none;
+            border-color: #E31837;
+            box-shadow: 0 0 0 3px rgba(227, 24, 55, 0.12);
+        }
+
+        button {
+            width: 100%; padding: 14px;
+            background: linear-gradient(135deg, #E31837 0%, #c01530 100%);
+            color: #fff; border: none; border-radius: 10px;
+            font-size: 1rem; font-weight: 600; cursor: pointer;
+            font-family: inherit;
+            transition: transform 0.15s, box-shadow 0.2s;
+            box-shadow: 0 4px 14px rgba(227, 24, 55, 0.25);
+        }
+        button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 20px rgba(227, 24, 55, 0.35);
+        }
+        button:active { transform: translateY(0); }
+
+        .error {
+            background: rgba(227, 24, 55, 0.08);
+            color: #E31837;
+            border: 1px solid rgba(227, 24, 55, 0.2);
+            padding: 12px 16px;
+            border-radius: 10px;
+            text-align: center;
+            font-size: 0.85rem; font-weight: 500;
+            margin-bottom: 20px;
+        }
+
+        .footer {
+            text-align: center; margin-top: 28px;
+            font-size: 0.75rem; color: #999999;
+        }
+    </style>
+</head>
+<body>
+    <div class="bg-pattern"></div>
+    <div class="login-card">
+        <div class="logo-row">
+            <img src="/frg-logo.png" alt="FRG">
+            <span>Automations</span>
+        </div>
+        <p class="subtitle">Sign in to access the dashboard</p>
+        {% if error %}<div class="error">{{ error }}</div>{% endif %}
+        <form method="POST">
+            <label for="email">Email</label>
+            <input type="email" id="email" name="email" required
+                   placeholder="you@example.com" autofocus>
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" required
+                   placeholder="Enter your password">
+            <button type="submit">Sign In</button>
+        </form>
+        <p class="footer">FRG Automations Dashboard</p>
+    </div>
+</body>
+</html>
+"""
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if current_user.is_authenticated:
+        return redirect(url_for("index"))
+    error = None
+    if request.method == "POST":
+        user = User.get_by_email(request.form.get("email", "").strip().lower())
+        if user and user.check_password(request.form.get("password", "")):
+            login_user(user)
+            next_page = request.args.get("next") or url_for("index")
+            return redirect(next_page)
+        error = "Invalid email or password"
+    return render_template_string(LOGIN_PAGE, error=error)
+
+
+@app.route("/logout")
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for("login"))
+
 
 # ============================================================================
 # DATABASE
@@ -118,7 +334,17 @@ def init_database():
     cursor = conn.cursor()
     
     cursor.execute("PRAGMA journal_mode=WAL")
-    
+
+    # Users table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            name TEXT NOT NULL
+        )
+    """)
+
     # Jobs raw table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS jobs_raw (
@@ -1127,6 +1353,7 @@ def patrol_refresh_summaries():
 # ============================================================================
 
 @app.route('/')
+@login_required
 def index():
     """Serve the dashboard."""
     return send_from_directory('.', 'index.html')
@@ -1137,6 +1364,7 @@ def logo():
     return send_from_directory('.', 'frg-logo.png')
 
 @app.route('/api/stats')
+@login_required
 def get_stats():
     """Get overall statistics with optional date filtering."""
     start_date = request.args.get('start')
@@ -1225,6 +1453,7 @@ def get_stats():
     })
 
 @app.route('/api/daily')
+@login_required
 def get_daily():
     """Get daily summary with optional date filtering."""
     start_date = request.args.get('start')
@@ -1259,6 +1488,7 @@ def get_daily():
     return jsonify(data)
 
 @app.route('/api/weekly')
+@login_required
 def get_weekly():
     """Get weekly summary with optional date filtering."""
     start_date = request.args.get('start')
@@ -1292,6 +1522,7 @@ def get_weekly():
     return jsonify(data)
 
 @app.route('/api/monthly')
+@login_required
 def get_monthly():
     """Get monthly summary with optional date filtering."""
     start_date = request.args.get('start')
@@ -1325,6 +1556,7 @@ def get_monthly():
     return jsonify(data)
 
 @app.route('/api/flags')
+@login_required
 def get_flags():
     """Get all flag values."""
     conn = get_db()
@@ -1338,6 +1570,7 @@ def get_flags():
     return jsonify(data)
 
 @app.route('/api/jobs')
+@login_required
 def get_jobs():
     """Get recent jobs with optional date and flag filtering."""
     limit = request.args.get('limit', 100, type=int)
@@ -1384,6 +1617,7 @@ def get_jobs():
     return jsonify(data)
 
 @app.route('/api/sync', methods=['POST'])
+@login_required
 def sync_jobs():
     """Trigger a sync from BigChange API."""
     data = request.json or {}
@@ -1446,6 +1680,7 @@ def sync_jobs():
         return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route('/api/config')
+@login_required
 def get_config():
     """Get current configuration (safe info only)."""
     return jsonify({
@@ -1461,11 +1696,13 @@ def get_config():
 # ============================================================================
 
 @app.route('/alarm')
+@login_required
 def alarm_index():
     """Serve the alarm activation dashboard."""
     return send_from_directory('.', 'alarm.html')
 
 @app.route('/api/alarm/stats')
+@login_required
 def alarm_get_stats():
     """Get overall alarm statistics with optional date filtering."""
     start_date = request.args.get('start')
@@ -1554,6 +1791,7 @@ def alarm_get_stats():
     })
 
 @app.route('/api/alarm/daily')
+@login_required
 def alarm_get_daily():
     """Get alarm daily summary with optional date filtering."""
     start_date = request.args.get('start')
@@ -1587,6 +1825,7 @@ def alarm_get_daily():
     return jsonify(data)
 
 @app.route('/api/alarm/weekly')
+@login_required
 def alarm_get_weekly():
     """Get alarm weekly summary with optional date filtering."""
     start_date = request.args.get('start')
@@ -1620,6 +1859,7 @@ def alarm_get_weekly():
     return jsonify(data)
 
 @app.route('/api/alarm/monthly')
+@login_required
 def alarm_get_monthly():
     """Get alarm monthly summary with optional date filtering."""
     start_date = request.args.get('start')
@@ -1653,6 +1893,7 @@ def alarm_get_monthly():
     return jsonify(data)
 
 @app.route('/api/alarm/flags')
+@login_required
 def alarm_get_flags():
     """Get all alarm flag values."""
     conn = get_db()
@@ -1666,6 +1907,7 @@ def alarm_get_flags():
     return jsonify(data)
 
 @app.route('/api/alarm/jobs')
+@login_required
 def alarm_get_jobs():
     """Get recent alarm jobs with optional date and flag filtering."""
     limit = request.args.get('limit', 100, type=int)
@@ -1711,6 +1953,7 @@ def alarm_get_jobs():
     return jsonify(data)
 
 @app.route('/api/alarm/sync', methods=['POST'])
+@login_required
 def alarm_sync_jobs():
     """Trigger a sync of alarm activation jobs from BigChange API."""
     data = request.json or {}
@@ -1773,6 +2016,7 @@ def alarm_sync_jobs():
         return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route('/api/alarm/config')
+@login_required
 def alarm_get_config():
     """Get current alarm configuration (safe info only)."""
     return jsonify({
@@ -1788,11 +2032,13 @@ def alarm_get_config():
 # ============================================================================
 
 @app.route('/patrol')
+@login_required
 def patrol_index():
     """Serve the patrol jobs dashboard."""
     return send_from_directory('.', 'patrol.html')
 
 @app.route('/api/patrol/stats')
+@login_required
 def patrol_get_stats():
     """Get overall patrol statistics with optional date filtering."""
     start_date = request.args.get('start')
@@ -1891,6 +2137,7 @@ def patrol_get_stats():
     })
 
 @app.route('/api/patrol/daily')
+@login_required
 def patrol_get_daily():
     """Get patrol daily summary with optional date filtering."""
     start_date = request.args.get('start')
@@ -1924,6 +2171,7 @@ def patrol_get_daily():
     return jsonify(data)
 
 @app.route('/api/patrol/weekly')
+@login_required
 def patrol_get_weekly():
     """Get patrol weekly summary with optional date filtering."""
     start_date = request.args.get('start')
@@ -1957,6 +2205,7 @@ def patrol_get_weekly():
     return jsonify(data)
 
 @app.route('/api/patrol/monthly')
+@login_required
 def patrol_get_monthly():
     """Get patrol monthly summary with optional date filtering."""
     start_date = request.args.get('start')
@@ -1990,6 +2239,7 @@ def patrol_get_monthly():
     return jsonify(data)
 
 @app.route('/api/patrol/flags')
+@login_required
 def patrol_get_flags():
     """Get all patrol flag values."""
     conn = get_db()
@@ -2003,6 +2253,7 @@ def patrol_get_flags():
     return jsonify(data)
 
 @app.route('/api/patrol/jobs')
+@login_required
 def patrol_get_jobs():
     """Get recent patrol jobs with optional date and flag filtering."""
     limit = request.args.get('limit', 100, type=int)
@@ -2054,6 +2305,7 @@ def patrol_get_jobs():
     return jsonify(data)
 
 @app.route('/api/patrol/sync', methods=['POST'])
+@login_required
 def patrol_sync_jobs():
     """Trigger a sync of patrol jobs from BigChange API."""
     data = request.json or {}
@@ -2120,6 +2372,7 @@ def patrol_sync_jobs():
         return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route('/api/patrol/config')
+@login_required
 def patrol_get_config():
     """Get current patrol configuration (safe info only)."""
     return jsonify({
