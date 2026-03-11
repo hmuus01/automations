@@ -365,6 +365,25 @@ def logout():
     return redirect(url_for("login"))
 
 
+@app.route('/setup-admin-xK9m2p')
+def setup_admin():
+    """One-time admin setup. Only works if no users exist yet."""
+    conn = get_db()
+    existing = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    if existing > 0:
+        conn.close()
+        return "Already set up.", 403
+    conn.execute(
+        "INSERT INTO users (email, password_hash, name, is_admin) VALUES (?, ?, ?, 1)",
+        ("hamza.muse@firstresponsegroup.com",
+         generate_password_hash("Inshallah2027"),
+         "Hamza Muse")
+    )
+    conn.commit()
+    conn.close()
+    return "Admin created. Go to /login", 200
+
+
 @app.route("/api/me")
 @login_required
 def api_me():
