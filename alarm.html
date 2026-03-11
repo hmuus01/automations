@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VPI Jobs Tracker | BigChange Dashboard</title>
+    <title>Alarm Activation Tracker | BigChange Dashboard</title>
     
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -897,7 +897,7 @@
                 <img src="/frg-logo.png" alt="First Response Group">
             </div>
             <div class="logo-text">
-                <h1>VPI Jobs Tracker</h1>
+                <h1>Alarm Activation Tracker</h1>
                 <p>First Response Group</p>
             </div>
         </div>
@@ -914,8 +914,8 @@
     </header>
 
     <nav class="nav-bar">
-        <a href="/" class="nav-link active">VPI Jobs</a>
-        <a href="/alarm" class="nav-link">Alarm Activation</a>
+        <a href="/" class="nav-link">VPI Jobs</a>
+        <a href="/alarm" class="nav-link active">Alarm Activation</a>
         <a href="/patrol" class="nav-link">Patrol Jobs</a>
     </nav>
 
@@ -957,7 +957,7 @@
         <!-- Stats Cards -->
         <div class="stats-grid" style="grid-template-columns: repeat(5, 1fr);">
             <div class="stat-card">
-                <div class="stat-label">Total VPI Jobs</div>
+                <div class="stat-label">Total Alarm Jobs</div>
                 <div class="stat-value" id="stat-total">-</div>
                 <div class="stat-change up" id="stat-total-change"></div>
             </div>
@@ -1077,8 +1077,8 @@
     <!-- Sync Modal -->
     <div class="modal-overlay" id="sync-modal">
         <div class="modal">
-            <h2>Sync Jobs from BigChange</h2>
-            <p>Pull the latest VPI jobs from the BigChange API.</p>
+            <h2>Sync Alarm Activation Jobs from BigChange</h2>
+            <p>Pull the latest Alarm Activation jobs from the BigChange API.</p>
             
             <div class="form-group">
                 <label>Start Date</label>
@@ -1313,7 +1313,7 @@
 
         async function loadStats() {
             try {
-                let url = '/api/stats';
+                let url = '/api/alarm/stats';
                 const dateParams = buildDateParams();
                 if (dateParams) url += '?' + dateParams;
 
@@ -1361,7 +1361,7 @@
 
         async function loadChartData(view) {
             try {
-                let url = `/api/${view}`;
+                let url = `/api/alarm/${view}`;
                 const dateParams = buildDateParams();
                 if (dateParams) url += '?' + dateParams;
 
@@ -1375,7 +1375,7 @@
 
         async function loadJobs(filter = 'all') {
             try {
-                let url = '/api/jobs?limit=50';
+                let url = '/api/alarm/jobs?limit=50';
                 if (filter !== 'all') {
                     url += `&flag=${filter}`;
                 }
@@ -1392,7 +1392,7 @@
         
         async function checkCredentials() {
             try {
-                const res = await fetch('/api/config');
+                const res = await fetch('/api/alarm/config');
                 const config = await res.json();
                 
                 if (!config.has_credentials) {
@@ -1668,7 +1668,7 @@
             resultEl.style.display = 'none';
             
             try {
-                const res = await fetch('/api/sync', {
+                const res = await fetch('/api/alarm/sync', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ start: startDate, end: endDate })
@@ -1709,7 +1709,7 @@
         }
         
         function exportData() {
-            window.open('/api/jobs?limit=10000', '_blank');
+            window.open('/api/alarm/jobs?limit=10000', '_blank');
         }
         
         // ============================================================

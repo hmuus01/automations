@@ -29,16 +29,8 @@ from functools import wraps
 import requests
 from requests.auth import HTTPBasicAuth
 
-# Try to import Flask, install if not present
-try:
-    from flask import Flask, jsonify, request, send_from_directory, render_template_string
-    from flask_cors import CORS
-except ImportError:
-    print("Installing required packages...")
-    import subprocess
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "flask", "flask-cors", "-q"])
-    from flask import Flask, jsonify, request, send_from_directory, render_template_string
-    from flask_cors import CORS
+from flask import Flask, jsonify, request, send_from_directory, render_template_string
+from flask_cors import CORS
 
 # ============================================================================
 # CONFIGURATION
@@ -55,17 +47,33 @@ CONFIG = {
     
     # VPI Filter
     "VPI_JOB_TYPE_ID": 322563,
+
+    # Alarm Activation Filter
+    "ALARM_JOB_TYPE_ID": 474681,
     
-    # CurrentFlag Classification
+    # CurrentFlag Classification (VPI)
     "SENT_FLAGS": ["Report Sent Via AI", "Report Sent To Client"],
     "HOLD_FLAGS": ["VPI Report On Hold - AI"],
     "NEW_FLAGS": ["New Report TKC VPI Automation"],
+
+    # CurrentFlag Classification (Alarm Activation)
+    "ALARM_SENT_FLAGS": ["Alarm report sent by AI", "Report Sent To Client"],
+    "ALARM_HOLD_FLAGS": ["Alarm report to be reviewed"],
+    "ALARM_NEW_FLAGS": ["New Report TKC Alarm Activation Automation"],
+
+    # Patrol Jobs - Real Time Filter
+    "PATROL_JOB_TYPE_ID": 350775,
+
+    # CurrentFlag Classification (Patrol)
+    "PATROL_SENT_FLAGS": ["No patrol incident identified by AI", "Patrol Incident identified by AI", "Report Sent To Client"],
+    "PATROL_HOLD_FLAGS": [],
+    "PATROL_NEW_FLAGS": ["New Report TKC Patrol Job Automation"],
     
     # Pagination
     "PAGE_SIZE": 5000,
     
     # Database
-    "DB_PATH": "vpi_jobs.db",
+    "DB_PATH": os.environ.get("DB_PATH", "vpi_jobs.db"),
     
     # Retry settings
     "MAX_RETRIES": 3,
@@ -228,11 +236,216 @@ def init_database():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_jobs_current_flag ON jobs_raw(current_flag)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_jobs_flag_category ON jobs_raw(flag_category)")
 
+    # Alarm Activation tables
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS alarm_jobs_raw (
+            job_id INTEGER PRIMARY KEY,
+            job_ref TEXT,
+            job_type TEXT,
+            job_type_id INTEGER,
+            job_category TEXT,
+            job_category_id INTEGER,
+            contact TEXT,
+            contact_id INTEGER,
+            contact_parent_id INTEGER,
+            postcode TEXT,
+            location TEXT,
+            resource TEXT,
+            status TEXT,
+            status_id INTEGER,
+            status_date DATETIME,
+            status_comment TEXT,
+            planned_start DATETIME,
+            planned_end DATETIME,
+            duration TEXT,
+            real_start DATETIME,
+            real_end DATETIME,
+            real_duration TEXT,
+            due_date DATETIME,
+            created DATETIME,
+            scheduled DATETIME,
+            current_flag TEXT,
+            flag_category TEXT,
+            description TEXT,
+            job_po TEXT,
+            actioned TEXT,
+            raw_json TEXT,
+            last_synced DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS alarm_jobs_daily_summary (
+            status_date DATE PRIMARY KEY,
+            total_jobs INTEGER DEFAULT 0,
+            sent_count INTEGER DEFAULT 0,
+            sent_ai_count INTEGER DEFAULT 0,
+            sent_manual_count INTEGER DEFAULT 0,
+            hold_count INTEGER DEFAULT 0,
+            new_count INTEGER DEFAULT 0,
+            other_count INTEGER DEFAULT 0,
+            completed_count INTEGER DEFAULT 0,
+            last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS alarm_jobs_weekly_summary (
+            week_start DATE PRIMARY KEY,
+            year_week TEXT,
+            total_jobs INTEGER DEFAULT 0,
+            sent_count INTEGER DEFAULT 0,
+            sent_ai_count INTEGER DEFAULT 0,
+            sent_manual_count INTEGER DEFAULT 0,
+            hold_count INTEGER DEFAULT 0,
+            new_count INTEGER DEFAULT 0,
+            other_count INTEGER DEFAULT 0,
+            completed_count INTEGER DEFAULT 0,
+            last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS alarm_jobs_monthly_summary (
+            month_start DATE PRIMARY KEY,
+            year_month TEXT,
+            total_jobs INTEGER DEFAULT 0,
+            sent_count INTEGER DEFAULT 0,
+            sent_ai_count INTEGER DEFAULT 0,
+            sent_manual_count INTEGER DEFAULT 0,
+            hold_count INTEGER DEFAULT 0,
+            new_count INTEGER DEFAULT 0,
+            other_count INTEGER DEFAULT 0,
+            completed_count INTEGER DEFAULT 0,
+            last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS alarm_flag_values (
+            flag_value TEXT PRIMARY KEY,
+            flag_category TEXT,
+            first_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+            last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+            job_count INTEGER DEFAULT 0
+        )
+    """)
+
+    # Alarm indexes
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_alarm_jobs_status_date ON alarm_jobs_raw(status_date)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_alarm_jobs_created ON alarm_jobs_raw(created)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_alarm_jobs_current_flag ON alarm_jobs_raw(current_flag)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_alarm_jobs_flag_category ON alarm_jobs_raw(flag_category)")
+
+    # Patrol Jobs - Real Time tables
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS patrol_jobs_raw (
+            job_id INTEGER PRIMARY KEY,
+            job_ref TEXT,
+            job_type TEXT,
+            job_type_id INTEGER,
+            job_category TEXT,
+            job_category_id INTEGER,
+            contact TEXT,
+            contact_id INTEGER,
+            contact_parent_id INTEGER,
+            postcode TEXT,
+            location TEXT,
+            resource TEXT,
+            status TEXT,
+            status_id INTEGER,
+            status_date DATETIME,
+            status_comment TEXT,
+            planned_start DATETIME,
+            planned_end DATETIME,
+            duration TEXT,
+            real_start DATETIME,
+            real_end DATETIME,
+            real_duration TEXT,
+            due_date DATETIME,
+            created DATETIME,
+            scheduled DATETIME,
+            current_flag TEXT,
+            flag_category TEXT,
+            description TEXT,
+            job_po TEXT,
+            actioned TEXT,
+            job_result TEXT,
+            raw_json TEXT,
+            last_synced DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS patrol_jobs_daily_summary (
+            status_date DATE PRIMARY KEY,
+            total_jobs INTEGER DEFAULT 0,
+            sent_count INTEGER DEFAULT 0,
+            sent_ai_count INTEGER DEFAULT 0,
+            sent_manual_count INTEGER DEFAULT 0,
+            hold_count INTEGER DEFAULT 0,
+            new_count INTEGER DEFAULT 0,
+            other_count INTEGER DEFAULT 0,
+            completed_count INTEGER DEFAULT 0,
+            last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS patrol_jobs_weekly_summary (
+            week_start DATE PRIMARY KEY,
+            year_week TEXT,
+            total_jobs INTEGER DEFAULT 0,
+            sent_count INTEGER DEFAULT 0,
+            sent_ai_count INTEGER DEFAULT 0,
+            sent_manual_count INTEGER DEFAULT 0,
+            hold_count INTEGER DEFAULT 0,
+            new_count INTEGER DEFAULT 0,
+            other_count INTEGER DEFAULT 0,
+            completed_count INTEGER DEFAULT 0,
+            last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS patrol_jobs_monthly_summary (
+            month_start DATE PRIMARY KEY,
+            year_month TEXT,
+            total_jobs INTEGER DEFAULT 0,
+            sent_count INTEGER DEFAULT 0,
+            sent_ai_count INTEGER DEFAULT 0,
+            sent_manual_count INTEGER DEFAULT 0,
+            hold_count INTEGER DEFAULT 0,
+            new_count INTEGER DEFAULT 0,
+            other_count INTEGER DEFAULT 0,
+            completed_count INTEGER DEFAULT 0,
+            last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS patrol_flag_values (
+            flag_value TEXT PRIMARY KEY,
+            flag_category TEXT,
+            first_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+            last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+            job_count INTEGER DEFAULT 0
+        )
+    """)
+
+    # Patrol indexes
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_patrol_jobs_status_date ON patrol_jobs_raw(status_date)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_patrol_jobs_created ON patrol_jobs_raw(created)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_patrol_jobs_current_flag ON patrol_jobs_raw(current_flag)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_patrol_jobs_flag_category ON patrol_jobs_raw(flag_category)")
+
     conn.commit()
     conn.close()
 
     # Run migration to update existing data
     migrate_flag_categories()
+    alarm_migrate_flag_categories()
+    patrol_migrate_flag_categories()
 
     logger.info("Database initialized")
 
@@ -279,6 +492,102 @@ def migrate_flag_categories():
     else:
         # Still refresh summaries to populate new columns
         refresh_summaries()
+
+
+def alarm_migrate_flag_categories():
+    """Migrate existing 'Sent' flag_category to 'Sent_AI' or 'Sent_Manual' and add new columns for alarm tables."""
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # Add new columns to alarm summary tables if they don't exist
+    for table in ['alarm_jobs_daily_summary', 'alarm_jobs_weekly_summary', 'alarm_jobs_monthly_summary']:
+        try:
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN sent_ai_count INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        try:
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN sent_manual_count INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+    # Update Sent_AI for "Alarm report sent by AI"
+    cursor.execute("""
+        UPDATE alarm_jobs_raw
+        SET flag_category = 'Sent_AI'
+        WHERE current_flag = 'Alarm report sent by AI' AND flag_category = 'Sent'
+    """)
+    ai_updated = cursor.rowcount
+
+    # Update Sent_Manual for "Report Sent To Client"
+    cursor.execute("""
+        UPDATE alarm_jobs_raw
+        SET flag_category = 'Sent_Manual'
+        WHERE current_flag = 'Report Sent To Client' AND flag_category = 'Sent'
+    """)
+    manual_updated = cursor.rowcount
+
+    conn.commit()
+    conn.close()
+
+    if ai_updated > 0 or manual_updated > 0:
+        logger.info(f"Alarm: Migrated flag categories: {ai_updated} to Sent_AI, {manual_updated} to Sent_Manual")
+        alarm_refresh_summaries()
+    else:
+        alarm_refresh_summaries()
+
+
+def patrol_migrate_flag_categories():
+    """Migrate existing 'Sent' flag_category to 'Sent_AI' or 'Sent_Manual' and add new columns for patrol tables."""
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # Add new columns to patrol summary tables if they don't exist
+    for table in ['patrol_jobs_daily_summary', 'patrol_jobs_weekly_summary', 'patrol_jobs_monthly_summary']:
+        try:
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN sent_ai_count INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        try:
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN sent_manual_count INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
+    # Update Sent_AI for "No patrol incident identified by AI" and "Patrol Incident identified by AI"
+    cursor.execute("""
+        UPDATE patrol_jobs_raw
+        SET flag_category = 'Sent_AI'
+        WHERE current_flag IN ('No patrol incident identified by AI', 'Patrol Incident identified by AI') AND flag_category = 'Sent'
+    """)
+    ai_updated = cursor.rowcount
+
+    # Update Sent_Manual for "Report Sent To Client"
+    cursor.execute("""
+        UPDATE patrol_jobs_raw
+        SET flag_category = 'Sent_Manual'
+        WHERE current_flag = 'Report Sent To Client' AND flag_category = 'Sent'
+    """)
+    manual_updated = cursor.rowcount
+
+    # Backfill job_result from raw_json for rows where job_result is NULL
+    cursor.execute("""
+        UPDATE patrol_jobs_raw
+        SET job_result = json_extract(raw_json, '$.JobResult')
+        WHERE job_result IS NULL AND raw_json IS NOT NULL AND json_extract(raw_json, '$.JobResult') IS NOT NULL
+    """)
+    backfilled = cursor.rowcount
+
+    conn.commit()
+    conn.close()
+
+    if backfilled > 0:
+        logger.info(f"Patrol: Backfilled job_result for {backfilled} rows")
+
+    if ai_updated > 0 or manual_updated > 0:
+        logger.info(f"Patrol: Migrated flag categories: {ai_updated} to Sent_AI, {manual_updated} to Sent_Manual")
+        patrol_refresh_summaries()
+    else:
+        patrol_refresh_summaries()
+
 
 # ============================================================================
 # BIGCHANGE API CLIENT
@@ -334,7 +643,7 @@ class BigChangeClient:
         
         return {}
     
-    def get_jobs(self, start_date: str, end_date: str, page: int = 0) -> List[Dict]:
+    def get_jobs(self, start_date: str, end_date: str, page: int = 0, job_type_id: Optional[int] = None) -> List[Dict]:
         """Fetch jobs from API."""
         params = {
             "action": "Jobslist",
@@ -348,7 +657,7 @@ class BigChangeClient:
             "Unallocated": 1,
             "Actioned": 1,
             "Unactioned": 1,
-            "JobTypeId": CONFIG["VPI_JOB_TYPE_ID"],
+            "JobTypeId": job_type_id if job_type_id is not None else CONFIG["VPI_JOB_TYPE_ID"],
             "DateOptionId": 2,  # 2 = Creation Date
         }
         
@@ -358,13 +667,13 @@ class BigChangeClient:
             return result
         return result.get("Result", [])
     
-    def get_all_jobs(self, start_date: str, end_date: str) -> List[Dict]:
+    def get_all_jobs(self, start_date: str, end_date: str, job_type_id: Optional[int] = None) -> List[Dict]:
         """Fetch all jobs with pagination."""
         all_jobs = []
         page = 0
-        
+
         while True:
-            jobs = self.get_jobs(start_date, end_date, page)
+            jobs = self.get_jobs(start_date, end_date, page, job_type_id=job_type_id)
             
             if not jobs:
                 break
@@ -386,7 +695,7 @@ class BigChangeClient:
 # ============================================================================
 
 def classify_flag(current_flag: Optional[str]) -> str:
-    """Classify CurrentFlag into category with AI/Manual distinction for Sent."""
+    """Classify CurrentFlag into category with AI/Manual distinction for Sent (VPI)."""
     if not current_flag:
         return "Other"
 
@@ -403,6 +712,41 @@ def classify_flag(current_flag: Optional[str]) -> str:
         return "New"
 
     return "Other"
+
+
+def classify_alarm_flag(current_flag: Optional[str]) -> str:
+    """Classify CurrentFlag into category for Alarm Activation jobs."""
+    if not current_flag:
+        return "Other"
+
+    flag = current_flag.strip()
+
+    # Distinguish between AI and Manual sent
+    if flag == "Alarm report sent by AI":
+        return "Sent_AI"
+    if flag == "Report Sent To Client":
+        return "Sent_Manual"
+    if flag in CONFIG["ALARM_HOLD_FLAGS"]:
+        return "Hold"
+    if flag in CONFIG["ALARM_NEW_FLAGS"]:
+        return "New"
+
+    return "Other"
+
+
+def classify_patrol_flag(current_flag: Optional[str]) -> str:
+    """Classify CurrentFlag into category for Patrol jobs."""
+    if not current_flag:
+        return "Other"
+    flag = current_flag.strip()
+    if flag in ("No patrol incident identified by AI", "Patrol Incident identified by AI"):
+        return "Sent_AI"
+    if flag == "Report Sent To Client":
+        return "Sent_Manual"
+    if flag in CONFIG["PATROL_NEW_FLAGS"]:
+        return "New"
+    return "Other"
+
 
 def upsert_jobs(jobs: List[Dict]) -> Tuple[int, int]:
     """Insert or update jobs."""
@@ -523,9 +867,260 @@ def refresh_summaries():
         FROM jobs_raw WHERE current_flag IS NOT NULL
         GROUP BY current_flag
     """)
-    
+
     conn.commit()
     conn.close()
+
+
+def alarm_upsert_jobs(jobs: List[Dict]) -> Tuple[int, int]:
+    """Insert or update alarm jobs."""
+    conn = get_db()
+    cursor = conn.cursor()
+    inserted = 0
+    updated = 0
+
+    for job in jobs:
+        job_id = job.get("JobId")
+        if not job_id:
+            continue
+
+        cursor.execute("SELECT 1 FROM alarm_jobs_raw WHERE job_id = ?", (job_id,))
+        exists = cursor.fetchone() is not None
+
+        current_flag = job.get("CurrentFlag")
+        flag_category = classify_alarm_flag(current_flag)
+
+        cursor.execute("""
+            INSERT OR REPLACE INTO alarm_jobs_raw (
+                job_id, job_ref, job_type, job_type_id, job_category, job_category_id,
+                contact, contact_id, contact_parent_id, postcode, location, resource,
+                status, status_id, status_date, status_comment,
+                planned_start, planned_end, duration,
+                real_start, real_end, real_duration, due_date,
+                created, scheduled, current_flag, flag_category,
+                description, job_po, actioned, raw_json, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            job_id, job.get("Ref"), job.get("Type"), job.get("JobTypeId"),
+            job.get("Category"), job.get("JobCategoryId"),
+            job.get("Contact"), job.get("ContactId"), job.get("ContactParentId"),
+            job.get("Postcode"), job.get("Location"), job.get("Resource"),
+            job.get("Status"), job.get("StatusId"), job.get("StatusDate"),
+            job.get("StatusComment"), job.get("PlannedStart"), job.get("PlannedEnd"),
+            job.get("Duration"), job.get("RealStart"), job.get("RealEnd"),
+            job.get("RealDuration"), job.get("DueDate"), job.get("Created"),
+            job.get("Scheduled"), current_flag, flag_category,
+            job.get("Description"), job.get("JobPO"), job.get("Actioned"),
+            json.dumps(job), datetime.utcnow().isoformat()
+        ))
+
+        if exists:
+            updated += 1
+        else:
+            inserted += 1
+
+    conn.commit()
+    conn.close()
+    return inserted, updated
+
+
+def alarm_refresh_summaries():
+    """Refresh all alarm summary tables."""
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # Daily - grouped by created date (Creation Date from BigChange)
+    cursor.execute("DELETE FROM alarm_jobs_daily_summary")
+    cursor.execute("""
+        INSERT INTO alarm_jobs_daily_summary (status_date, total_jobs, sent_count, sent_ai_count, sent_manual_count, hold_count, new_count, other_count, completed_count)
+        SELECT
+            DATE(created),
+            COUNT(*),
+            SUM(CASE WHEN flag_category IN ('Sent_AI', 'Sent_Manual') THEN 1 ELSE 0 END),
+            SUM(CASE WHEN flag_category = 'Sent_AI' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN flag_category = 'Sent_Manual' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN flag_category = 'Hold' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN flag_category = 'New' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN flag_category = 'Other' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN status_id IN (12, 13) THEN 1 ELSE 0 END)
+        FROM alarm_jobs_raw WHERE created IS NOT NULL
+        GROUP BY DATE(created)
+    """)
+
+    # Weekly - grouped by created date (Creation Date from BigChange)
+    cursor.execute("DELETE FROM alarm_jobs_weekly_summary")
+    cursor.execute("""
+        INSERT INTO alarm_jobs_weekly_summary (week_start, year_week, total_jobs, sent_count, sent_ai_count, sent_manual_count, hold_count, new_count, other_count, completed_count)
+        SELECT
+            DATE(created, 'weekday 0', '-6 days'),
+            STRFTIME('%Y-W%W', created),
+            COUNT(*),
+            SUM(CASE WHEN flag_category IN ('Sent_AI', 'Sent_Manual') THEN 1 ELSE 0 END),
+            SUM(CASE WHEN flag_category = 'Sent_AI' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN flag_category = 'Sent_Manual' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN flag_category = 'Hold' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN flag_category = 'New' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN flag_category = 'Other' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN status_id IN (12, 13) THEN 1 ELSE 0 END)
+        FROM alarm_jobs_raw WHERE created IS NOT NULL
+        GROUP BY DATE(created, 'weekday 0', '-6 days')
+    """)
+
+    # Monthly - grouped by created date (Creation Date from BigChange)
+    cursor.execute("DELETE FROM alarm_jobs_monthly_summary")
+    cursor.execute("""
+        INSERT INTO alarm_jobs_monthly_summary (month_start, year_month, total_jobs, sent_count, sent_ai_count, sent_manual_count, hold_count, new_count, other_count, completed_count)
+        SELECT
+            DATE(created, 'start of month'),
+            STRFTIME('%Y-%m', created),
+            COUNT(*),
+            SUM(CASE WHEN flag_category IN ('Sent_AI', 'Sent_Manual') THEN 1 ELSE 0 END),
+            SUM(CASE WHEN flag_category = 'Sent_AI' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN flag_category = 'Sent_Manual' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN flag_category = 'Hold' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN flag_category = 'New' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN flag_category = 'Other' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN status_id IN (12, 13) THEN 1 ELSE 0 END)
+        FROM alarm_jobs_raw WHERE created IS NOT NULL
+        GROUP BY DATE(created, 'start of month')
+    """)
+
+    # Flag values
+    cursor.execute("""
+        INSERT OR REPLACE INTO alarm_flag_values (flag_value, flag_category, last_seen, job_count)
+        SELECT current_flag, flag_category, MAX(last_synced), COUNT(*)
+        FROM alarm_jobs_raw WHERE current_flag IS NOT NULL
+        GROUP BY current_flag
+    """)
+
+    conn.commit()
+    conn.close()
+
+
+def patrol_upsert_jobs(jobs: List[Dict]) -> Tuple[int, int]:
+    """Insert or update patrol jobs."""
+    conn = get_db()
+    cursor = conn.cursor()
+    inserted = 0
+    updated = 0
+
+    for job in jobs:
+        job_id = job.get("JobId")
+        if not job_id:
+            continue
+
+        cursor.execute("SELECT 1 FROM patrol_jobs_raw WHERE job_id = ?", (job_id,))
+        exists = cursor.fetchone() is not None
+
+        current_flag = job.get("CurrentFlag")
+        flag_category = classify_patrol_flag(current_flag)
+
+        cursor.execute("""
+            INSERT OR REPLACE INTO patrol_jobs_raw (
+                job_id, job_ref, job_type, job_type_id, job_category, job_category_id,
+                contact, contact_id, contact_parent_id, postcode, location, resource,
+                status, status_id, status_date, status_comment,
+                planned_start, planned_end, duration,
+                real_start, real_end, real_duration, due_date,
+                created, scheduled, current_flag, flag_category,
+                description, job_po, actioned, job_result, raw_json, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            job_id, job.get("Ref"), job.get("Type"), job.get("JobTypeId"),
+            job.get("Category"), job.get("JobCategoryId"),
+            job.get("Contact"), job.get("ContactId"), job.get("ContactParentId"),
+            job.get("Postcode"), job.get("Location"), job.get("Resource"),
+            job.get("Status"), job.get("StatusId"), job.get("StatusDate"),
+            job.get("StatusComment"), job.get("PlannedStart"), job.get("PlannedEnd"),
+            job.get("Duration"), job.get("RealStart"), job.get("RealEnd"),
+            job.get("RealDuration"), job.get("DueDate"), job.get("Created"),
+            job.get("Scheduled"), current_flag, flag_category,
+            job.get("Description"), job.get("JobPO"), job.get("Actioned"),
+            job.get("JobResult"), json.dumps(job), datetime.utcnow().isoformat()
+        ))
+
+        if exists:
+            updated += 1
+        else:
+            inserted += 1
+
+    conn.commit()
+    conn.close()
+    return inserted, updated
+
+
+def patrol_refresh_summaries():
+    """Refresh all patrol summary tables."""
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # Daily - grouped by created date (Creation Date from BigChange)
+    cursor.execute("DELETE FROM patrol_jobs_daily_summary")
+    cursor.execute("""
+        INSERT INTO patrol_jobs_daily_summary (status_date, total_jobs, sent_count, sent_ai_count, sent_manual_count, hold_count, new_count, other_count, completed_count)
+        SELECT
+            DATE(created),
+            COUNT(*),
+            SUM(CASE WHEN flag_category IN ('Sent_AI', 'Sent_Manual') THEN 1 ELSE 0 END),
+            SUM(CASE WHEN flag_category = 'Sent_AI' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN flag_category = 'Sent_Manual' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN flag_category = 'Hold' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN flag_category = 'New' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN flag_category = 'Other' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN status_id IN (12, 13) THEN 1 ELSE 0 END)
+        FROM patrol_jobs_raw WHERE created IS NOT NULL
+        GROUP BY DATE(created)
+    """)
+
+    # Weekly - grouped by created date (Creation Date from BigChange)
+    cursor.execute("DELETE FROM patrol_jobs_weekly_summary")
+    cursor.execute("""
+        INSERT INTO patrol_jobs_weekly_summary (week_start, year_week, total_jobs, sent_count, sent_ai_count, sent_manual_count, hold_count, new_count, other_count, completed_count)
+        SELECT
+            DATE(created, 'weekday 0', '-6 days'),
+            STRFTIME('%Y-W%W', created),
+            COUNT(*),
+            SUM(CASE WHEN flag_category IN ('Sent_AI', 'Sent_Manual') THEN 1 ELSE 0 END),
+            SUM(CASE WHEN flag_category = 'Sent_AI' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN flag_category = 'Sent_Manual' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN flag_category = 'Hold' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN flag_category = 'New' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN flag_category = 'Other' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN status_id IN (12, 13) THEN 1 ELSE 0 END)
+        FROM patrol_jobs_raw WHERE created IS NOT NULL
+        GROUP BY DATE(created, 'weekday 0', '-6 days')
+    """)
+
+    # Monthly - grouped by created date (Creation Date from BigChange)
+    cursor.execute("DELETE FROM patrol_jobs_monthly_summary")
+    cursor.execute("""
+        INSERT INTO patrol_jobs_monthly_summary (month_start, year_month, total_jobs, sent_count, sent_ai_count, sent_manual_count, hold_count, new_count, other_count, completed_count)
+        SELECT
+            DATE(created, 'start of month'),
+            STRFTIME('%Y-%m', created),
+            COUNT(*),
+            SUM(CASE WHEN flag_category IN ('Sent_AI', 'Sent_Manual') THEN 1 ELSE 0 END),
+            SUM(CASE WHEN flag_category = 'Sent_AI' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN flag_category = 'Sent_Manual' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN flag_category = 'Hold' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN flag_category = 'New' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN flag_category = 'Other' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN status_id IN (12, 13) THEN 1 ELSE 0 END)
+        FROM patrol_jobs_raw WHERE created IS NOT NULL
+        GROUP BY DATE(created, 'start of month')
+    """)
+
+    # Flag values
+    cursor.execute("""
+        INSERT OR REPLACE INTO patrol_flag_values (flag_value, flag_category, last_seen, job_count)
+        SELECT current_flag, flag_category, MAX(last_synced), COUNT(*)
+        FROM patrol_jobs_raw WHERE current_flag IS NOT NULL
+        GROUP BY current_flag
+    """)
+
+    conn.commit()
+    conn.close()
+
 
 # ============================================================================
 # API ROUTES
@@ -862,11 +1457,690 @@ def get_config():
     })
 
 # ============================================================================
+# ALARM ACTIVATION ROUTES
+# ============================================================================
+
+@app.route('/alarm')
+def alarm_index():
+    """Serve the alarm activation dashboard."""
+    return send_from_directory('.', 'alarm.html')
+
+@app.route('/api/alarm/stats')
+def alarm_get_stats():
+    """Get overall alarm statistics with optional date filtering."""
+    start_date = request.args.get('start')
+    end_date = request.args.get('end')
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # Build date filter clause - filter by created date (Creation Date)
+    date_filter = ""
+    params = []
+    if start_date and end_date:
+        date_filter = "WHERE DATE(created) >= ? AND DATE(created) <= ?"
+        params = [start_date, end_date]
+    elif start_date:
+        date_filter = "WHERE DATE(created) >= ?"
+        params = [start_date]
+    elif end_date:
+        date_filter = "WHERE DATE(created) <= ?"
+        params = [end_date]
+
+    # Total jobs
+    cursor.execute(f"SELECT COUNT(*) FROM alarm_jobs_raw {date_filter}", params)
+    total = cursor.fetchone()[0]
+
+    # By flag category (raw categories including Sent_AI and Sent_Manual)
+    cursor.execute(f"""
+        SELECT flag_category, COUNT(*) as cnt
+        FROM alarm_jobs_raw {date_filter}
+        GROUP BY flag_category
+    """, params)
+    by_flag_raw = {row[0]: row[1] for row in cursor.fetchall()}
+
+    # Compute combined Sent and breakdown
+    sent_ai = by_flag_raw.get('Sent_AI', 0)
+    sent_manual = by_flag_raw.get('Sent_Manual', 0)
+    total_sent = sent_ai + sent_manual
+
+    # Build the by_flag dict with both combined and individual metrics
+    by_flag = {
+        'Sent': total_sent,
+        'Sent_AI': sent_ai,
+        'Sent_Manual': sent_manual,
+        'Hold': by_flag_raw.get('Hold', 0),
+        'New': by_flag_raw.get('New', 0),
+        'Other': by_flag_raw.get('Other', 0)
+    }
+
+    # AI Automation Rate (of processed reports: AI + Manual + Hold)
+    hold = by_flag.get('Hold', 0)
+    processed = sent_ai + sent_manual + hold
+    ai_rate = (sent_ai / processed * 100) if processed > 0 else 0
+
+    # By status
+    cursor.execute(f"""
+        SELECT status, COUNT(*) as cnt
+        FROM alarm_jobs_raw {date_filter}
+        GROUP BY status ORDER BY cnt DESC
+    """, params)
+    by_status = {row[0]: row[1] for row in cursor.fetchall()}
+
+    # Last sync
+    cursor.execute("""
+        SELECT run_end, jobs_fetched, status
+        FROM sync_log ORDER BY id DESC LIMIT 1
+    """)
+    last_sync = cursor.fetchone()
+
+    conn.close()
+
+    return jsonify({
+        "total_jobs": total,
+        "by_flag": by_flag,
+        "by_status": by_status,
+        "ai_automation_rate": round(ai_rate, 1),
+        "date_filter": {
+            "start": start_date,
+            "end": end_date,
+            "active": bool(start_date or end_date)
+        },
+        "last_sync": {
+            "time": last_sync[0] if last_sync else None,
+            "jobs_fetched": last_sync[1] if last_sync else 0,
+            "status": last_sync[2] if last_sync else "never"
+        }
+    })
+
+@app.route('/api/alarm/daily')
+def alarm_get_daily():
+    """Get alarm daily summary with optional date filtering."""
+    start_date = request.args.get('start')
+    end_date = request.args.get('end')
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    query = """
+        SELECT status_date, total_jobs, sent_count, sent_ai_count, sent_manual_count,
+               hold_count, new_count, other_count, completed_count
+        FROM alarm_jobs_daily_summary
+    """
+    params = []
+
+    if start_date and end_date:
+        query += " WHERE status_date >= ? AND status_date <= ?"
+        params = [start_date, end_date]
+    elif start_date:
+        query += " WHERE status_date >= ?"
+        params = [start_date]
+    elif end_date:
+        query += " WHERE status_date <= ?"
+        params = [end_date]
+
+    query += " ORDER BY status_date"
+
+    cursor.execute(query, params)
+    data = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return jsonify(data)
+
+@app.route('/api/alarm/weekly')
+def alarm_get_weekly():
+    """Get alarm weekly summary with optional date filtering."""
+    start_date = request.args.get('start')
+    end_date = request.args.get('end')
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    query = """
+        SELECT week_start, year_week, total_jobs, sent_count, sent_ai_count, sent_manual_count,
+               hold_count, new_count, other_count, completed_count
+        FROM alarm_jobs_weekly_summary
+    """
+    params = []
+
+    if start_date and end_date:
+        query += " WHERE week_start >= ? AND week_start <= ?"
+        params = [start_date, end_date]
+    elif start_date:
+        query += " WHERE week_start >= ?"
+        params = [start_date]
+    elif end_date:
+        query += " WHERE week_start <= ?"
+        params = [end_date]
+
+    query += " ORDER BY week_start"
+
+    cursor.execute(query, params)
+    data = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return jsonify(data)
+
+@app.route('/api/alarm/monthly')
+def alarm_get_monthly():
+    """Get alarm monthly summary with optional date filtering."""
+    start_date = request.args.get('start')
+    end_date = request.args.get('end')
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    query = """
+        SELECT month_start, year_month, total_jobs, sent_count, sent_ai_count, sent_manual_count,
+               hold_count, new_count, other_count, completed_count
+        FROM alarm_jobs_monthly_summary
+    """
+    params = []
+
+    if start_date and end_date:
+        query += " WHERE month_start >= ? AND month_start <= ?"
+        params = [start_date, end_date]
+    elif start_date:
+        query += " WHERE month_start >= ?"
+        params = [start_date]
+    elif end_date:
+        query += " WHERE month_start <= ?"
+        params = [end_date]
+
+    query += " ORDER BY month_start"
+
+    cursor.execute(query, params)
+    data = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return jsonify(data)
+
+@app.route('/api/alarm/flags')
+def alarm_get_flags():
+    """Get all alarm flag values."""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT flag_value, flag_category, job_count, last_seen
+        FROM alarm_flag_values ORDER BY job_count DESC
+    """)
+    data = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return jsonify(data)
+
+@app.route('/api/alarm/jobs')
+def alarm_get_jobs():
+    """Get recent alarm jobs with optional date and flag filtering."""
+    limit = request.args.get('limit', 100, type=int)
+    flag = request.args.get('flag', None)
+    start_date = request.args.get('start')
+    end_date = request.args.get('end')
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    query = """
+        SELECT job_id, job_ref, contact, resource, status, current_flag, flag_category, created, status_date
+        FROM alarm_jobs_raw
+    """
+    conditions = []
+    params = []
+
+    # Flag filter - handle combined "Sent" filter
+    if flag:
+        if flag == 'Sent':
+            conditions.append("flag_category IN ('Sent_AI', 'Sent_Manual')")
+        else:
+            conditions.append("flag_category = ?")
+            params.append(flag)
+
+    # Date filters - filter by created date (Creation Date)
+    if start_date:
+        conditions.append("DATE(created) >= ?")
+        params.append(start_date)
+    if end_date:
+        conditions.append("DATE(created) <= ?")
+        params.append(end_date)
+
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+
+    query += " ORDER BY created DESC LIMIT ?"
+    params.append(limit)
+
+    cursor.execute(query, params)
+    data = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return jsonify(data)
+
+@app.route('/api/alarm/sync', methods=['POST'])
+def alarm_sync_jobs():
+    """Trigger a sync of alarm activation jobs from BigChange API."""
+    data = request.json or {}
+    start_date = data.get('start', (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d'))
+    end_date = data.get('end', datetime.now().strftime('%Y-%m-%d'))
+
+    # Check credentials
+    if not all([CONFIG["USERNAME"], CONFIG["PASSWORD"], CONFIG["COMPANY_KEY"]]):
+        return jsonify({
+            "success": False,
+            "error": "Missing BigChange credentials. Set BIGCHANGE_USERNAME, BIGCHANGE_PASSWORD, BIGCHANGE_KEY environment variables."
+        }), 400
+
+    # Log sync start
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO sync_log (run_start, date_from, date_to, status) VALUES (?, ?, ?, ?)",
+        (datetime.utcnow().isoformat(), start_date, end_date, "running")
+    )
+    sync_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+
+    try:
+        client = BigChangeClient(CONFIG)
+        jobs = client.get_all_jobs(start_date, end_date, job_type_id=CONFIG["ALARM_JOB_TYPE_ID"])
+
+        inserted, updated = alarm_upsert_jobs(jobs)
+        alarm_refresh_summaries()
+
+        # Update sync log
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE sync_log SET run_end = ?, jobs_fetched = ?, jobs_inserted = ?, jobs_updated = ?, status = ?
+            WHERE id = ?
+        """, (datetime.utcnow().isoformat(), len(jobs), inserted, updated, "success", sync_id))
+        conn.commit()
+        conn.close()
+
+        return jsonify({
+            "success": True,
+            "jobs_fetched": len(jobs),
+            "inserted": inserted,
+            "updated": updated
+        })
+
+    except Exception as e:
+        logger.error(f"Alarm sync failed: {e}")
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE sync_log SET run_end = ?, status = ?, error_message = ? WHERE id = ?",
+            (datetime.utcnow().isoformat(), "error", str(e), sync_id)
+        )
+        conn.commit()
+        conn.close()
+
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/alarm/config')
+def alarm_get_config():
+    """Get current alarm configuration (safe info only)."""
+    return jsonify({
+        "alarm_job_type_id": CONFIG["ALARM_JOB_TYPE_ID"],
+        "sent_flags": CONFIG["SENT_FLAGS"],
+        "hold_flags": CONFIG["HOLD_FLAGS"],
+        "new_flags": CONFIG["NEW_FLAGS"],
+        "has_credentials": all([CONFIG["USERNAME"], CONFIG["PASSWORD"], CONFIG["COMPANY_KEY"]])
+    })
+
+# ============================================================================
+# PATROL JOBS ROUTES
+# ============================================================================
+
+@app.route('/patrol')
+def patrol_index():
+    """Serve the patrol jobs dashboard."""
+    return send_from_directory('.', 'patrol.html')
+
+@app.route('/api/patrol/stats')
+def patrol_get_stats():
+    """Get overall patrol statistics with optional date filtering."""
+    start_date = request.args.get('start')
+    end_date = request.args.get('end')
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # Build date filter clause - filter by created date (Creation Date)
+    date_filter = ""
+    params = []
+    if start_date and end_date:
+        date_filter = "WHERE DATE(created) >= ? AND DATE(created) <= ?"
+        params = [start_date, end_date]
+    elif start_date:
+        date_filter = "WHERE DATE(created) >= ?"
+        params = [start_date]
+    elif end_date:
+        date_filter = "WHERE DATE(created) <= ?"
+        params = [end_date]
+
+    # Total jobs
+    cursor.execute(f"SELECT COUNT(*) FROM patrol_jobs_raw {date_filter}", params)
+    total = cursor.fetchone()[0]
+
+    # By flag category (raw categories including Sent_AI and Sent_Manual)
+    cursor.execute(f"""
+        SELECT flag_category, COUNT(*) as cnt
+        FROM patrol_jobs_raw {date_filter}
+        GROUP BY flag_category
+    """, params)
+    by_flag_raw = {row[0]: row[1] for row in cursor.fetchall()}
+
+    # Compute combined Sent and breakdown
+    sent_ai = by_flag_raw.get('Sent_AI', 0)
+    sent_manual = by_flag_raw.get('Sent_Manual', 0)
+    total_sent = sent_ai + sent_manual
+
+    # Build the by_flag dict with both combined and individual metrics
+    by_flag = {
+        'Sent': total_sent,
+        'Sent_AI': sent_ai,
+        'Sent_Manual': sent_manual,
+        'Hold': by_flag_raw.get('Hold', 0),
+        'New': by_flag_raw.get('New', 0),
+        'Other': by_flag_raw.get('Other', 0)
+    }
+
+    # AI Automation Rate (of processed reports: AI + Manual + Hold)
+    hold = by_flag.get('Hold', 0)
+    processed = sent_ai + sent_manual + hold
+    ai_rate = (sent_ai / processed * 100) if processed > 0 else 0
+
+    # By status
+    cursor.execute(f"""
+        SELECT status, COUNT(*) as cnt
+        FROM patrol_jobs_raw {date_filter}
+        GROUP BY status ORDER BY cnt DESC
+    """, params)
+    by_status = {row[0]: row[1] for row in cursor.fetchall()}
+
+    # Do Not Send count
+    dns_filter = date_filter.replace("WHERE", "AND") if date_filter else ""
+    cursor.execute(f"""
+        SELECT COUNT(*) FROM patrol_jobs_raw
+        WHERE status_comment = 'DO NOT SEND GOOD PATROL REPORT' {dns_filter}
+    """, params)
+    do_not_send_count = cursor.fetchone()[0]
+
+    # Last sync
+    cursor.execute("""
+        SELECT run_end, jobs_fetched, status
+        FROM sync_log ORDER BY id DESC LIMIT 1
+    """)
+    last_sync = cursor.fetchone()
+
+    conn.close()
+
+    return jsonify({
+        "total_jobs": total,
+        "by_flag": by_flag,
+        "by_status": by_status,
+        "do_not_send_count": do_not_send_count,
+        "ai_automation_rate": round(ai_rate, 1),
+        "patrol_job_type_id": CONFIG["PATROL_JOB_TYPE_ID"],
+        "date_filter": {
+            "start": start_date,
+            "end": end_date,
+            "active": bool(start_date or end_date)
+        },
+        "last_sync": {
+            "time": last_sync[0] if last_sync else None,
+            "jobs_fetched": last_sync[1] if last_sync else 0,
+            "status": last_sync[2] if last_sync else "never"
+        }
+    })
+
+@app.route('/api/patrol/daily')
+def patrol_get_daily():
+    """Get patrol daily summary with optional date filtering."""
+    start_date = request.args.get('start')
+    end_date = request.args.get('end')
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    query = """
+        SELECT status_date, total_jobs, sent_count, sent_ai_count, sent_manual_count,
+               hold_count, new_count, other_count, completed_count
+        FROM patrol_jobs_daily_summary
+    """
+    params = []
+
+    if start_date and end_date:
+        query += " WHERE status_date >= ? AND status_date <= ?"
+        params = [start_date, end_date]
+    elif start_date:
+        query += " WHERE status_date >= ?"
+        params = [start_date]
+    elif end_date:
+        query += " WHERE status_date <= ?"
+        params = [end_date]
+
+    query += " ORDER BY status_date"
+
+    cursor.execute(query, params)
+    data = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return jsonify(data)
+
+@app.route('/api/patrol/weekly')
+def patrol_get_weekly():
+    """Get patrol weekly summary with optional date filtering."""
+    start_date = request.args.get('start')
+    end_date = request.args.get('end')
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    query = """
+        SELECT week_start, year_week, total_jobs, sent_count, sent_ai_count, sent_manual_count,
+               hold_count, new_count, other_count, completed_count
+        FROM patrol_jobs_weekly_summary
+    """
+    params = []
+
+    if start_date and end_date:
+        query += " WHERE week_start >= ? AND week_start <= ?"
+        params = [start_date, end_date]
+    elif start_date:
+        query += " WHERE week_start >= ?"
+        params = [start_date]
+    elif end_date:
+        query += " WHERE week_start <= ?"
+        params = [end_date]
+
+    query += " ORDER BY week_start"
+
+    cursor.execute(query, params)
+    data = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return jsonify(data)
+
+@app.route('/api/patrol/monthly')
+def patrol_get_monthly():
+    """Get patrol monthly summary with optional date filtering."""
+    start_date = request.args.get('start')
+    end_date = request.args.get('end')
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    query = """
+        SELECT month_start, year_month, total_jobs, sent_count, sent_ai_count, sent_manual_count,
+               hold_count, new_count, other_count, completed_count
+        FROM patrol_jobs_monthly_summary
+    """
+    params = []
+
+    if start_date and end_date:
+        query += " WHERE month_start >= ? AND month_start <= ?"
+        params = [start_date, end_date]
+    elif start_date:
+        query += " WHERE month_start >= ?"
+        params = [start_date]
+    elif end_date:
+        query += " WHERE month_start <= ?"
+        params = [end_date]
+
+    query += " ORDER BY month_start"
+
+    cursor.execute(query, params)
+    data = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return jsonify(data)
+
+@app.route('/api/patrol/flags')
+def patrol_get_flags():
+    """Get all patrol flag values."""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT flag_value, flag_category, job_count, last_seen
+        FROM patrol_flag_values ORDER BY job_count DESC
+    """)
+    data = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return jsonify(data)
+
+@app.route('/api/patrol/jobs')
+def patrol_get_jobs():
+    """Get recent patrol jobs with optional date and flag filtering."""
+    limit = request.args.get('limit', 100, type=int)
+    flag = request.args.get('flag', None)
+    result_filter = request.args.get('result', None)
+    start_date = request.args.get('start')
+    end_date = request.args.get('end')
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    query = """
+        SELECT job_id, job_ref, contact, resource, status, current_flag, flag_category, created, status_date, status_comment as job_result
+        FROM patrol_jobs_raw
+    """
+    conditions = []
+    params = []
+
+    # Flag filter - handle combined "Sent" filter
+    if flag:
+        if flag == 'Sent':
+            conditions.append("flag_category IN ('Sent_AI', 'Sent_Manual')")
+        else:
+            conditions.append("flag_category = ?")
+            params.append(flag)
+
+    # Job result / status_comment filter
+    if result_filter:
+        conditions.append("status_comment = ?")
+        params.append(result_filter)
+
+    # Date filters - filter by created date (Creation Date)
+    if start_date:
+        conditions.append("DATE(created) >= ?")
+        params.append(start_date)
+    if end_date:
+        conditions.append("DATE(created) <= ?")
+        params.append(end_date)
+
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+
+    query += " ORDER BY created DESC LIMIT ?"
+    params.append(limit)
+
+    cursor.execute(query, params)
+    data = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return jsonify(data)
+
+@app.route('/api/patrol/sync', methods=['POST'])
+def patrol_sync_jobs():
+    """Trigger a sync of patrol jobs from BigChange API."""
+    data = request.json or {}
+    start_date = data.get('start', (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d'))
+    end_date = data.get('end', datetime.now().strftime('%Y-%m-%d'))
+
+    # Check credentials
+    if not all([CONFIG["USERNAME"], CONFIG["PASSWORD"], CONFIG["COMPANY_KEY"]]):
+        return jsonify({
+            "success": False,
+            "error": "Missing BigChange credentials. Set BIGCHANGE_USERNAME, BIGCHANGE_PASSWORD, BIGCHANGE_KEY environment variables."
+        }), 400
+
+    # Log sync start
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO sync_log (run_start, date_from, date_to, status) VALUES (?, ?, ?, ?)",
+        (datetime.utcnow().isoformat(), start_date, end_date, "running")
+    )
+    sync_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+
+    try:
+        client = BigChangeClient(CONFIG)
+        jobs = client.get_all_jobs(start_date, end_date, job_type_id=CONFIG["PATROL_JOB_TYPE_ID"])
+
+        if jobs:
+            print("PATROL JOB KEYS:", list(jobs[0].keys()))
+            print("PATROL JOB SAMPLE:", jobs[0])
+
+        inserted, updated = patrol_upsert_jobs(jobs)
+        patrol_refresh_summaries()
+
+        # Update sync log
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE sync_log SET run_end = ?, jobs_fetched = ?, jobs_inserted = ?, jobs_updated = ?, status = ?
+            WHERE id = ?
+        """, (datetime.utcnow().isoformat(), len(jobs), inserted, updated, "success", sync_id))
+        conn.commit()
+        conn.close()
+
+        return jsonify({
+            "success": True,
+            "jobs_fetched": len(jobs),
+            "inserted": inserted,
+            "updated": updated
+        })
+
+    except Exception as e:
+        logger.error(f"Patrol sync failed: {e}")
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE sync_log SET run_end = ?, status = ?, error_message = ? WHERE id = ?",
+            (datetime.utcnow().isoformat(), "error", str(e), sync_id)
+        )
+        conn.commit()
+        conn.close()
+
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/patrol/config')
+def patrol_get_config():
+    """Get current patrol configuration (safe info only)."""
+    return jsonify({
+        "patrol_job_type_id": CONFIG["PATROL_JOB_TYPE_ID"],
+        "sent_flags": CONFIG["PATROL_SENT_FLAGS"],
+        "hold_flags": CONFIG["PATROL_HOLD_FLAGS"],
+        "new_flags": CONFIG["PATROL_NEW_FLAGS"],
+        "has_credentials": all([CONFIG["USERNAME"], CONFIG["PASSWORD"], CONFIG["COMPANY_KEY"]])
+    })
+
+# ============================================================================
+# INITIALIZE DATABASE ON IMPORT (needed for gunicorn)
+# ============================================================================
+
+init_database()
+
+# ============================================================================
 # MAIN
 # ============================================================================
 
 if __name__ == '__main__':
-    init_database()
     print("\n" + "="*60)
     print("VPI Jobs Tracker Dashboard")
     print("="*60)
@@ -883,4 +2157,5 @@ if __name__ == '__main__':
     
     print("\n" + "="*60 + "\n")
     
-    app.run(debug=True, host='0.0.0.0', port=5001)
+    port = int(os.environ.get("PORT", 5001))
+    app.run(debug=False, host='0.0.0.0', port=port)

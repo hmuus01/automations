@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VPI Jobs Tracker | BigChange Dashboard</title>
+    <title>Patrol Jobs Tracker | BigChange Dashboard</title>
     
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -897,7 +897,7 @@
                 <img src="/frg-logo.png" alt="First Response Group">
             </div>
             <div class="logo-text">
-                <h1>VPI Jobs Tracker</h1>
+                <h1>Patrol Jobs Tracker</h1>
                 <p>First Response Group</p>
             </div>
         </div>
@@ -914,9 +914,9 @@
     </header>
 
     <nav class="nav-bar">
-        <a href="/" class="nav-link active">VPI Jobs</a>
+        <a href="/" class="nav-link">VPI Jobs</a>
         <a href="/alarm" class="nav-link">Alarm Activation</a>
-        <a href="/patrol" class="nav-link">Patrol Jobs</a>
+        <a href="/patrol" class="nav-link active">Patrol Jobs</a>
     </nav>
 
     <main class="main">
@@ -955,9 +955,9 @@
         </div>
 
         <!-- Stats Cards -->
-        <div class="stats-grid" style="grid-template-columns: repeat(5, 1fr);">
+        <div class="stats-grid" style="grid-template-columns: repeat(6, 1fr);">
             <div class="stat-card">
-                <div class="stat-label">Total VPI Jobs</div>
+                <div class="stat-label">Total Patrol Jobs</div>
                 <div class="stat-value" id="stat-total">-</div>
                 <div class="stat-change up" id="stat-total-change"></div>
             </div>
@@ -1010,6 +1010,11 @@
                 <div class="stat-value" id="stat-new">-</div>
                 <div class="stat-change" id="stat-new-pct"></div>
             </div>
+            <div class="stat-card" style="cursor: pointer;" onclick="filterJobs('do_not_send')">
+                <div class="stat-label">Do Not Send</div>
+                <div class="stat-value" style="color: #8B0000;" id="stat-dns">-</div>
+                <div class="stat-change" id="stat-dns-pct"></div>
+            </div>
         </div>
         
         <!-- Charts -->
@@ -1052,6 +1057,7 @@
                     <button class="filter-btn" data-filter="Sent_Manual" onclick="filterJobs('Sent_Manual')">Sent (Manual)</button>
                     <button class="filter-btn" data-filter="Hold" onclick="filterJobs('Hold')">Hold</button>
                     <button class="filter-btn" data-filter="New" onclick="filterJobs('New')">New</button>
+                    <button class="filter-btn" data-filter="do_not_send" onclick="filterJobs('do_not_send')">Do Not Send</button>
                 </div>
             </div>
             <div class="table-container">
@@ -1063,6 +1069,7 @@
                             <th>Resource</th>
                             <th>Status</th>
                             <th>Flag</th>
+                            <th>Job Result</th>
                             <th>Created Date</th>
                         </tr>
                     </thead>
@@ -1077,8 +1084,8 @@
     <!-- Sync Modal -->
     <div class="modal-overlay" id="sync-modal">
         <div class="modal">
-            <h2>Sync Jobs from BigChange</h2>
-            <p>Pull the latest VPI jobs from the BigChange API.</p>
+            <h2>Sync Patrol Jobs from BigChange</h2>
+            <p>Pull the latest Patrol jobs from the BigChange API.</p>
             
             <div class="form-group">
                 <label>Start Date</label>
@@ -1313,7 +1320,7 @@
 
         async function loadStats() {
             try {
-                let url = '/api/stats';
+                let url = '/api/patrol/stats';
                 const dateParams = buildDateParams();
                 if (dateParams) url += '?' + dateParams;
 
@@ -1344,6 +1351,12 @@
                 document.getElementById('stat-new-pct').textContent =
                     `${((stats.by_flag?.New || 0) / total * 100).toFixed(1)}% of total`;
 
+                // Do Not Send count
+                const dnsCount = stats.do_not_send_count || 0;
+                document.getElementById('stat-dns').textContent = formatNumber(dnsCount);
+                document.getElementById('stat-dns-pct').textContent =
+                    `${(dnsCount / total * 100).toFixed(1)}% of total`;
+
                 // Sync time
                 if (stats.last_sync?.time) {
                     document.getElementById('sync-time').textContent =
@@ -1361,7 +1374,7 @@
 
         async function loadChartData(view) {
             try {
-                let url = `/api/${view}`;
+                let url = `/api/patrol/${view}`;
                 const dateParams = buildDateParams();
                 if (dateParams) url += '?' + dateParams;
 
@@ -1375,8 +1388,10 @@
 
         async function loadJobs(filter = 'all') {
             try {
-                let url = '/api/jobs?limit=50';
-                if (filter !== 'all') {
+                let url = '/api/patrol/jobs?limit=50';
+                if (filter === 'do_not_send') {
+                    url += '&result=DO NOT SEND GOOD PATROL REPORT';
+                } else if (filter !== 'all') {
                     url += `&flag=${filter}`;
                 }
                 const dateParams = buildDateParams();
@@ -1392,7 +1407,7 @@
         
         async function checkCredentials() {
             try {
-                const res = await fetch('/api/config');
+                const res = await fetch('/api/patrol/config');
                 const config = await res.json();
                 
                 if (!config.has_credentials) {
@@ -1579,7 +1594,7 @@
             if (!jobs.length) {
                 tbody.innerHTML = `
                     <tr>
-                        <td colspan="6" style="text-align: center; color: var(--text-secondary); padding: 3rem;">
+                        <td colspan="7" style="text-align: center; color: var(--text-secondary); padding: 3rem;">
                             No jobs found. Click "Sync Now" to fetch data from BigChange.
                         </td>
                     </tr>
@@ -1605,6 +1620,8 @@
                     badgeText = 'OTHER';
                 }
 
+                const jobResult = job.job_result || '-';
+
                 return `
                     <tr>
                         <td><span class="job-ref">${job.job_ref || '-'}</span></td>
@@ -1612,6 +1629,7 @@
                         <td>${job.resource || '-'}</td>
                         <td>${job.status || '-'}</td>
                         <td><span class="status-badge ${badgeClass}">${badgeText}</span></td>
+                        <td>${jobResult}</td>
                         <td>${formatDateTime(job.created)}</td>
                     </tr>
                 `;
@@ -1668,7 +1686,7 @@
             resultEl.style.display = 'none';
             
             try {
-                const res = await fetch('/api/sync', {
+                const res = await fetch('/api/patrol/sync', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ start: startDate, end: endDate })
@@ -1709,7 +1727,7 @@
         }
         
         function exportData() {
-            window.open('/api/jobs?limit=10000', '_blank');
+            window.open('/api/patrol/jobs?limit=10000', '_blank');
         }
         
         // ============================================================
