@@ -835,18 +835,74 @@ def admin_change_password(user_id):
 # DATABASE
 # ============================================================================
 
+_TURSO_URL = os.environ.get("TURSO_DATABASE_URL")
+_TURSO_TOKEN = os.environ.get("TURSO_AUTH_TOKEN")
+
+
+class _DictRow:
+    """Portable row supporting row[0], row['col'], and dict(row)."""
+    __slots__ = ('_data', '_cols')
+
+    def __init__(self, cursor, row):
+        self._data = row
+        self._cols = [col[0] for col in cursor.description]
+
+    def __getitem__(self, key):
+        if isinstance(key, (int, slice)):
+            return self._data[key]
+        return self._data[self._cols.index(key)]
+
+    def keys(self):
+        return list(self._cols)
+
+
+class _SyncConn:
+    """Wraps a libsql connection to auto-sync with Turso on commit/close."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def commit(self):
+        self._conn.commit()
+        self._conn.sync()
+
+    def close(self):
+        try:
+            self._conn.sync()
+        except Exception:
+            pass
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
 def get_db():
-    """Get database connection."""
+    """Get database connection. Uses Turso if configured, otherwise local SQLite."""
+    if _TURSO_URL and _TURSO_TOKEN:
+        import libsql_experimental as libsql
+        conn = libsql.connect(
+            "local_replica.db",
+            sync_url=_TURSO_URL,
+            auth_token=_TURSO_TOKEN,
+        )
+        conn.sync()
+        conn.row_factory = _DictRow
+        return _SyncConn(conn)
+
     conn = sqlite3.connect(CONFIG["DB_PATH"])
     conn.row_factory = sqlite3.Row
     return conn
+
 
 def init_database():
     """Initialize database with required tables."""
     conn = get_db()
     cursor = conn.cursor()
-    
-    cursor.execute("PRAGMA journal_mode=WAL")
+
+    try:
+        cursor.execute("PRAGMA journal_mode=WAL")
+    except Exception:
+        pass
 
     # Users table
     cursor.execute("""

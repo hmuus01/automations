@@ -14,8 +14,25 @@ from werkzeug.security import generate_password_hash
 DB_PATH = os.environ.get("DB_PATH", "vpi_jobs.db")
 
 
+def get_connection():
+    turso_url = os.environ.get("TURSO_DATABASE_URL")
+    turso_token = os.environ.get("TURSO_AUTH_TOKEN")
+
+    if turso_url and turso_token:
+        import libsql_experimental as libsql
+        conn = libsql.connect(
+            "local_replica.db",
+            sync_url=turso_url,
+            auth_token=turso_token,
+        )
+        conn.sync()
+        return conn
+
+    return sqlite3.connect(DB_PATH)
+
+
 def create_user(email, password, name):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
@@ -30,7 +47,7 @@ def create_user(email, password, name):
 
     try:
         cursor.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
-    except sqlite3.OperationalError:
+    except Exception:
         pass
 
     cursor.execute("SELECT id FROM users WHERE email = ?", (email,))
@@ -45,6 +62,8 @@ def create_user(email, password, name):
         (email, password_hash, name),
     )
     conn.commit()
+    if hasattr(conn, 'sync'):
+        conn.sync()
     print(f"Admin user created: {name} <{email}>")
     conn.close()
 
