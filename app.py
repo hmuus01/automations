@@ -318,25 +318,6 @@ def logout():
     return redirect(url_for("login"))
 
 
-@app.route('/setup-admin-xK9m2p')
-def setup_admin():
-    """One-time admin setup. Only works if no users exist yet."""
-    conn = get_db()
-    existing = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-    if existing > 0:
-        conn.close()
-        return "Already set up.", 403
-    conn.execute(
-        "INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)",
-        ("hamza.muse@firstresponsegroup.com",
-         generate_password_hash("Inshallah2027"),
-         "Hamza Muse")
-    )
-    conn.commit()
-    conn.close()
-    return "Admin created.", 200
-
-
 # ============================================================================
 # DATABASE
 # ============================================================================
