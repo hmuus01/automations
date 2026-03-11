@@ -343,17 +343,45 @@ LOGIN_PAGE = """
 """
 
 
+_SQL_KEYWORDS_RE = re.compile(
+    r'\b(DROP|INSERT|SELECT|DELETE|UPDATE|ALTER|UNION|EXEC)\b|--|;',
+    re.IGNORECASE,
+)
+
+
+def _sanitise_login_email(raw):
+    """Sanitise email input: strip, lowercase, enforce length, reject SQL keywords."""
+    val = raw.strip().lower()
+    if len(val) > 254:
+        return None
+    if _SQL_KEYWORDS_RE.search(val):
+        return None
+    if not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', val):
+        return None
+    return val
+
+
+def _sanitise_login_password(raw):
+    """Sanitise password input: enforce max length."""
+    if len(raw) > 128:
+        return None
+    return raw
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if current_user.is_authenticated:
         return redirect(url_for("index"))
     error = None
     if request.method == "POST":
-        user = User.get_by_email(request.form.get("email", "").strip().lower())
-        if user and user.check_password(request.form.get("password", "")):
-            login_user(user)
-            next_page = request.args.get("next") or url_for("index")
-            return redirect(next_page)
+        email = _sanitise_login_email(request.form.get("email", ""))
+        password = _sanitise_login_password(request.form.get("password", ""))
+        if email and password:
+            user = User.get_by_email(email)
+            if user and user.check_password(password):
+                login_user(user)
+                next_page = request.args.get("next") or url_for("index")
+                return redirect(next_page)
         error = "Invalid email or password"
     return render_template_string(LOGIN_PAGE, error=error)
 
@@ -367,17 +395,22 @@ def logout():
 
 @app.route('/setup-admin-xK9m2p')
 def setup_admin():
-    """One-time admin setup. Only works if no users exist yet."""
+    """One-time admin setup. Only works if no users exist yet.
+    Reads credentials from ADMIN_EMAIL / ADMIN_PASSWORD env vars."""
     conn = get_db()
     existing = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
     if existing > 0:
         conn.close()
         return "Already set up.", 403
+    admin_email = os.environ.get("ADMIN_EMAIL", "hamza.muse@firstresponsegroup.com")
+    admin_password = os.environ.get("ADMIN_PASSWORD")
+    admin_name = os.environ.get("ADMIN_NAME", "Hamza Muse")
+    if not admin_password:
+        conn.close()
+        return "Set ADMIN_PASSWORD environment variable first.", 400
     conn.execute(
         "INSERT INTO users (email, password_hash, name, is_admin) VALUES (?, ?, ?, 1)",
-        ("hamza.muse@firstresponsegroup.com",
-         generate_password_hash("Inshallah2027"),
-         "Hamza Muse")
+        (admin_email, generate_password_hash(admin_password), admin_name)
     )
     conn.commit()
     conn.close()
@@ -719,8 +752,8 @@ def admin_add_user():
         flash("Access denied", "error")
         return redirect(url_for("index"))
 
-    name = request.form.get("name", "").strip()
-    email = request.form.get("email", "").strip().lower()
+    name = request.form.get("name", "").strip()[:128]
+    email = _sanitise_login_email(request.form.get("email", ""))
     password = request.form.get("password", "")
     is_admin = 1 if request.form.get("is_admin") == "1" else 0
 
@@ -728,12 +761,12 @@ def admin_add_user():
         flash("Name is required", "error")
         return redirect(url_for("admin_users"))
 
-    if not email or not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', email):
-        flash("Valid email is required", "error")
+    if not email:
+        flash("Valid email is required (max 254 chars, no SQL keywords)", "error")
         return redirect(url_for("admin_users"))
 
-    if len(password) < 8:
-        flash("Password must be at least 8 characters", "error")
+    if len(password) < 8 or len(password) > 128:
+        flash("Password must be 8-128 characters", "error")
         return redirect(url_for("admin_users"))
 
     conn = get_db()
@@ -780,8 +813,8 @@ def admin_change_password(user_id):
         return redirect(url_for("index"))
 
     new_password = request.form.get("new_password", "")
-    if len(new_password) < 8:
-        flash("Password must be at least 8 characters", "error")
+    if len(new_password) < 8 or len(new_password) > 128:
+        flash("Password must be 8-128 characters", "error")
         return redirect(url_for("admin_users"))
 
     conn = get_db()
