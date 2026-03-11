@@ -23,9 +23,15 @@ def create_user(email, password, name):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             email TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
-            name TEXT NOT NULL
+            name TEXT NOT NULL,
+            is_admin INTEGER NOT NULL DEFAULT 0
         )
     """)
+
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
 
     cursor.execute("SELECT id FROM users WHERE email = ?", (email,))
     if cursor.fetchone():
@@ -35,7 +41,7 @@ def create_user(email, password, name):
 
     password_hash = generate_password_hash(password)
     cursor.execute(
-        "INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)",
+        "INSERT INTO users (email, password_hash, name, is_admin) VALUES (?, ?, ?, 1)",
         (email, password_hash, name),
     )
     conn.commit()

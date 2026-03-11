@@ -29,7 +29,8 @@ from functools import wraps
 import requests
 from requests.auth import HTTPBasicAuth
 
-from flask import Flask, jsonify, request, send_from_directory, render_template_string, redirect, url_for
+import re
+from flask import Flask, jsonify, request, send_from_directory, render_template_string, redirect, url_for, flash
 from flask_cors import CORS
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -117,11 +118,12 @@ login_manager.login_view = "login"
 class User(UserMixin):
     """User model backed by SQLite."""
 
-    def __init__(self, id, email, password_hash, name):
+    def __init__(self, id, email, password_hash, name, is_admin=False):
         self.id = id
         self.email = email
         self.password_hash = password_hash
         self.name = name
+        self.is_admin = bool(is_admin)
 
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
@@ -129,19 +131,19 @@ class User(UserMixin):
     @staticmethod
     def get_by_id(user_id):
         conn = get_db()
-        row = conn.execute("SELECT id, email, password_hash, name FROM users WHERE id = ?", (user_id,)).fetchone()
+        row = conn.execute("SELECT id, email, password_hash, name, is_admin FROM users WHERE id = ?", (user_id,)).fetchone()
         conn.close()
         if row:
-            return User(row[0], row[1], row[2], row[3])
+            return User(row[0], row[1], row[2], row[3], row[4])
         return None
 
     @staticmethod
     def get_by_email(email):
         conn = get_db()
-        row = conn.execute("SELECT id, email, password_hash, name FROM users WHERE email = ?", (email,)).fetchone()
+        row = conn.execute("SELECT id, email, password_hash, name, is_admin FROM users WHERE email = ?", (email,)).fetchone()
         conn.close()
         if row:
-            return User(row[0], row[1], row[2], row[3])
+            return User(row[0], row[1], row[2], row[3], row[4])
         return None
 
 
@@ -318,6 +320,417 @@ def logout():
     return redirect(url_for("login"))
 
 
+@app.route("/api/me")
+@login_required
+def api_me():
+    """Return current user info for nav bar rendering."""
+    return jsonify({"is_admin": current_user.is_admin})
+
+
+# ============================================================================
+# ADMIN PANEL
+# ============================================================================
+
+ADMIN_PAGE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Panel | FRG Automations</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --frg-red: #E31837;
+            --frg-orange: #F7941D;
+            --frg-green: #00A651;
+            --frg-green-light: #4DBD74;
+            --bg-dark: #f5f5f7;
+            --bg-card: #ffffff;
+            --bg-card-hover: #fafafa;
+            --border: #e0e0e0;
+            --text-primary: #1a1a1a;
+            --text-secondary: #666666;
+            --text-muted: #999999;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'DM Sans', -apple-system, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+        .bg-pattern {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: -1;
+            opacity: 0.6;
+            background-image:
+                radial-gradient(circle at 20% 80%, rgba(227,24,55,0.03) 0%, transparent 50%),
+                radial-gradient(circle at 80% 20%, rgba(0,166,81,0.03) 0%, transparent 50%),
+                radial-gradient(circle at 50% 50%, rgba(247,148,29,0.02) 0%, transparent 70%);
+        }
+
+        /* Header */
+        header {
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border);
+            padding: 1rem 3rem;
+            display: flex; align-items: center; justify-content: space-between;
+        }
+        .header-left { display: flex; align-items: center; gap: 12px; }
+        .header-left img { height: 36px; }
+        .header-left h1 { font-size: 1.15rem; font-weight: 700; }
+        .header-left p { font-size: 0.75rem; color: var(--text-muted); }
+        .header-right { display: flex; align-items: center; gap: 12px; }
+        .header-right span { font-size: 0.85rem; color: var(--text-secondary); }
+
+        /* Nav */
+        .nav-bar {
+            display: flex; gap: 0;
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border);
+            padding: 0 3rem;
+        }
+        .nav-link {
+            padding: 0.75rem 1.5rem; font-size: 0.875rem; font-weight: 600;
+            color: var(--text-secondary); text-decoration: none;
+            border-bottom: 2px solid transparent; transition: all 0.2s;
+        }
+        .nav-link:hover { color: var(--text-primary); background: var(--bg-card-hover); }
+        .nav-link.active { color: var(--frg-red); border-bottom-color: var(--frg-red); }
+
+        .container { max-width: 1000px; margin: 2rem auto; padding: 0 2rem; }
+
+        /* Flash messages */
+        .flash { padding: 12px 18px; border-radius: 10px; font-size: 0.85rem; font-weight: 500; margin-bottom: 1.5rem; }
+        .flash-success { background: rgba(0,166,81,0.08); color: var(--frg-green); border: 1px solid rgba(0,166,81,0.2); }
+        .flash-error { background: rgba(227,24,55,0.08); color: var(--frg-red); border: 1px solid rgba(227,24,55,0.2); }
+
+        /* Card */
+        .card {
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: 16px; padding: 28px 32px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.04); margin-bottom: 1.5rem;
+        }
+        .card h2 { font-size: 1.1rem; font-weight: 700; margin-bottom: 20px; }
+
+        /* Table */
+        table { width: 100%; border-collapse: collapse; }
+        th {
+            text-align: left; font-size: 0.75rem; font-weight: 600;
+            color: var(--text-muted); text-transform: uppercase;
+            letter-spacing: 0.04em; padding: 10px 12px;
+            border-bottom: 1px solid var(--border);
+        }
+        td {
+            padding: 14px 12px; font-size: 0.9rem;
+            border-bottom: 1px solid var(--border);
+            vertical-align: middle;
+        }
+        tr:last-child td { border-bottom: none; }
+        tr:hover { background: var(--bg-card-hover); }
+        .badge {
+            display: inline-block; padding: 3px 10px; border-radius: 6px;
+            font-size: 0.75rem; font-weight: 600;
+        }
+        .badge-yes { background: rgba(0,166,81,0.1); color: var(--frg-green); }
+        .badge-no { background: rgba(102,102,102,0.1); color: var(--text-secondary); }
+        .badge-you { background: rgba(247,148,29,0.1); color: var(--frg-orange); font-size: 0.7rem; margin-left: 6px; }
+
+        /* Buttons */
+        .btn {
+            padding: 8px 16px; border-radius: 8px; font-size: 0.8rem;
+            font-weight: 600; font-family: inherit; cursor: pointer;
+            border: none; transition: all 0.15s; display: inline-flex;
+            align-items: center; gap: 4px;
+        }
+        .btn-red { background: rgba(227,24,55,0.1); color: var(--frg-red); }
+        .btn-red:hover { background: rgba(227,24,55,0.2); }
+        .btn-blue { background: rgba(44,62,80,0.1); color: #2C3E50; }
+        .btn-blue:hover { background: rgba(44,62,80,0.2); }
+        .btn-primary {
+            background: linear-gradient(135deg, var(--frg-green) 0%, var(--frg-green-light) 100%);
+            color: #fff; padding: 12px 24px; font-size: 0.9rem;
+            box-shadow: 0 4px 14px rgba(0,166,81,0.25);
+        }
+        .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(0,166,81,0.35); }
+        .actions { display: flex; gap: 6px; align-items: center; }
+
+        /* Form */
+        .form-grid {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+        }
+        .form-group { display: flex; flex-direction: column; }
+        .form-group.full { grid-column: 1 / -1; }
+        .form-group label {
+            font-size: 0.8rem; font-weight: 600; color: var(--text-secondary);
+            text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px;
+        }
+        .form-group input[type="text"],
+        .form-group input[type="email"],
+        .form-group input[type="password"] {
+            padding: 11px 14px; background: var(--bg-dark);
+            border: 1px solid var(--border); border-radius: 10px;
+            font-size: 0.9rem; font-family: inherit; color: var(--text-primary);
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        .form-group input:focus {
+            outline: none; border-color: var(--frg-green);
+            box-shadow: 0 0 0 3px rgba(0,166,81,0.12);
+        }
+        .checkbox-row {
+            display: flex; align-items: center; gap: 8px;
+            padding-top: 24px;
+        }
+        .checkbox-row input[type="checkbox"] {
+            width: 18px; height: 18px; accent-color: var(--frg-green); cursor: pointer;
+        }
+        .checkbox-row label {
+            text-transform: none; letter-spacing: 0; font-size: 0.9rem;
+            color: var(--text-primary); cursor: pointer; margin-bottom: 0;
+        }
+
+        /* Inline password form */
+        .pw-form {
+            display: none; margin-top: 8px;
+        }
+        .pw-form.open { display: flex; gap: 8px; align-items: center; }
+        .pw-form input {
+            padding: 7px 12px; background: var(--bg-dark);
+            border: 1px solid var(--border); border-radius: 8px;
+            font-size: 0.82rem; font-family: inherit; color: var(--text-primary);
+            width: 200px;
+        }
+        .pw-form input:focus { outline: none; border-color: var(--frg-green); }
+        .pw-form button { padding: 7px 14px; font-size: 0.78rem; }
+
+        @media (max-width: 768px) {
+            header { padding: 1rem; }
+            .nav-bar { padding: 0 1rem; overflow-x: auto; }
+            .container { padding: 0 1rem; }
+            .form-grid { grid-template-columns: 1fr; }
+            .checkbox-row { padding-top: 0; }
+            table { font-size: 0.82rem; }
+            .actions { flex-direction: column; }
+        }
+    </style>
+</head>
+<body>
+    <div class="bg-pattern"></div>
+    <header>
+        <div class="header-left">
+            <img src="/frg-logo.png" alt="FRG">
+            <div>
+                <h1>Admin Panel</h1>
+                <p>First Response Group</p>
+            </div>
+        </div>
+        <div class="header-right">
+            <span>{{ current_user.name }}</span>
+            <a href="/logout" class="btn btn-blue">Logout</a>
+        </div>
+    </header>
+
+    <nav class="nav-bar">
+        <a href="/" class="nav-link">VPI Jobs</a>
+        <a href="/alarm" class="nav-link">Alarm Activation</a>
+        <a href="/patrol" class="nav-link">Patrol Jobs</a>
+        <a href="/admin/users" class="nav-link active">Admin Panel</a>
+    </nav>
+
+    <div class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, message in messages %}
+        <div class="flash flash-{{ category }}">{{ message }}</div>
+        {% endfor %}
+        {% endwith %}
+
+        <!-- Users Table -->
+        <div class="card">
+            <h2>Users</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Email</th>
+                        <th>Admin</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for user in users %}
+                    <tr>
+                        <td>
+                            {{ user.name }}
+                            {% if user.id == current_user.id %}<span class="badge badge-you">YOU</span>{% endif %}
+                        </td>
+                        <td>{{ user.email }}</td>
+                        <td>
+                            <span class="badge {{ 'badge-yes' if user.is_admin else 'badge-no' }}">
+                                {{ "Yes" if user.is_admin else "No" }}
+                            </span>
+                        </td>
+                        <td>
+                            <div class="actions">
+                                <button class="btn btn-blue" onclick="togglePw({{ user.id }})">Change Password</button>
+                                {% if user.id != current_user.id %}
+                                <form method="POST" action="/admin/users/delete/{{ user.id }}"
+                                      onsubmit="return confirm('Delete {{ user.name }}?')">
+                                    <button type="submit" class="btn btn-red">Delete</button>
+                                </form>
+                                {% endif %}
+                            </div>
+                            <form class="pw-form" id="pw-{{ user.id }}" method="POST" action="/admin/users/password/{{ user.id }}">
+                                <input type="password" name="new_password" placeholder="New password (min 8)" required minlength="8">
+                                <button type="submit" class="btn btn-primary" style="padding:7px 14px;font-size:0.78rem;">Save</button>
+                            </form>
+                        </td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Add User Form -->
+        <div class="card">
+            <h2>Add New User</h2>
+            <form method="POST" action="/admin/users/add">
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label for="name">Full Name</label>
+                        <input type="text" id="name" name="name" required placeholder="John Smith">
+                    </div>
+                    <div class="form-group">
+                        <label for="email">Email</label>
+                        <input type="email" id="email" name="email" required placeholder="john@example.com">
+                    </div>
+                    <div class="form-group">
+                        <label for="password">Password</label>
+                        <input type="password" id="password" name="password" required minlength="8" placeholder="Min 8 characters">
+                    </div>
+                    <div class="form-group">
+                        <div class="checkbox-row">
+                            <input type="checkbox" id="is_admin" name="is_admin" value="1">
+                            <label for="is_admin">Administrator</label>
+                        </div>
+                    </div>
+                    <div class="form-group full">
+                        <button type="submit" class="btn btn-primary">Add User</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+    function togglePw(id) {
+        const el = document.getElementById('pw-' + id);
+        el.classList.toggle('open');
+        if (el.classList.contains('open')) el.querySelector('input').focus();
+    }
+    </script>
+</body>
+</html>
+"""
+
+
+@app.route("/admin/users")
+@login_required
+def admin_users():
+    if not current_user.is_admin:
+        flash("Access denied", "error")
+        return redirect(url_for("index"))
+    conn = get_db()
+    rows = conn.execute("SELECT id, email, password_hash, name, is_admin FROM users ORDER BY id").fetchall()
+    conn.close()
+    users = [User(r[0], r[1], r[2], r[3], r[4]) for r in rows]
+    return render_template_string(ADMIN_PAGE, users=users, current_user=current_user)
+
+
+@app.route("/admin/users/add", methods=["POST"])
+@login_required
+def admin_add_user():
+    if not current_user.is_admin:
+        flash("Access denied", "error")
+        return redirect(url_for("index"))
+
+    name = request.form.get("name", "").strip()
+    email = request.form.get("email", "").strip().lower()
+    password = request.form.get("password", "")
+    is_admin = 1 if request.form.get("is_admin") == "1" else 0
+
+    if not name:
+        flash("Name is required", "error")
+        return redirect(url_for("admin_users"))
+
+    if not email or not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', email):
+        flash("Valid email is required", "error")
+        return redirect(url_for("admin_users"))
+
+    if len(password) < 8:
+        flash("Password must be at least 8 characters", "error")
+        return redirect(url_for("admin_users"))
+
+    conn = get_db()
+    existing = conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
+    if existing:
+        conn.close()
+        flash("A user with that email already exists", "error")
+        return redirect(url_for("admin_users"))
+
+    conn.execute(
+        "INSERT INTO users (email, password_hash, name, is_admin) VALUES (?, ?, ?, ?)",
+        (email, generate_password_hash(password), name, is_admin)
+    )
+    conn.commit()
+    conn.close()
+    flash(f"User {name} created", "success")
+    return redirect(url_for("admin_users"))
+
+
+@app.route("/admin/users/delete/<int:user_id>", methods=["POST"])
+@login_required
+def admin_delete_user(user_id):
+    if not current_user.is_admin:
+        flash("Access denied", "error")
+        return redirect(url_for("index"))
+
+    if user_id == current_user.id:
+        flash("You cannot delete yourself", "error")
+        return redirect(url_for("admin_users"))
+
+    conn = get_db()
+    conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+    flash("User deleted", "success")
+    return redirect(url_for("admin_users"))
+
+
+@app.route("/admin/users/password/<int:user_id>", methods=["POST"])
+@login_required
+def admin_change_password(user_id):
+    if not current_user.is_admin:
+        flash("Access denied", "error")
+        return redirect(url_for("index"))
+
+    new_password = request.form.get("new_password", "")
+    if len(new_password) < 8:
+        flash("Password must be at least 8 characters", "error")
+        return redirect(url_for("admin_users"))
+
+    conn = get_db()
+    conn.execute(
+        "UPDATE users SET password_hash = ? WHERE id = ?",
+        (generate_password_hash(new_password), user_id)
+    )
+    conn.commit()
+    conn.close()
+    flash("Password updated", "success")
+    return redirect(url_for("admin_users"))
+
+
 # ============================================================================
 # DATABASE
 # ============================================================================
@@ -341,7 +754,8 @@ def init_database():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             email TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
-            name TEXT NOT NULL
+            name TEXT NOT NULL,
+            is_admin INTEGER NOT NULL DEFAULT 0
         )
     """)
 
@@ -664,6 +1078,12 @@ def init_database():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_patrol_jobs_created ON patrol_jobs_raw(created)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_patrol_jobs_current_flag ON patrol_jobs_raw(current_flag)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_patrol_jobs_flag_category ON patrol_jobs_raw(flag_category)")
+
+    # Migrate: add is_admin column to users if missing
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
 
     conn.commit()
     conn.close()

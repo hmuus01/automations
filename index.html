@@ -913,11 +913,14 @@
         </div>
     </header>
 
-    <nav class="nav-bar">
+    <nav class="nav-bar" id="main-nav">
         <a href="/" class="nav-link active">VPI Jobs</a>
         <a href="/alarm" class="nav-link">Alarm Activation</a>
         <a href="/patrol" class="nav-link">Patrol Jobs</a>
     </nav>
+    <script>
+    fetch('/api/me').then(r=>r.json()).then(d=>{if(d.is_admin){const a=document.createElement('a');a.href='/admin/users';a.className='nav-link';a.textContent='Admin Panel';document.getElementById('main-nav').appendChild(a);}});
+    </script>
 
     <main class="main">
         <!-- Alert for missing credentials -->
