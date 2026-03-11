@@ -104,6 +104,7 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__, static_folder='static')
 app.secret_key = os.environ.get("SECRET_KEY", "dev-change-me-in-production")
+app.permanent_session_lifetime = timedelta(hours=8)
 CORS(app)
 
 # ============================================================================
@@ -379,7 +380,9 @@ def login():
         if email and password:
             user = User.get_by_email(email)
             if user and user.check_password(password):
-                login_user(user)
+                from flask import session
+                session.permanent = True
+                login_user(user, remember=False)
                 next_page = request.args.get("next") or url_for("index")
                 return redirect(next_page)
         error = "Invalid email or password"
