@@ -19,14 +19,13 @@ def get_connection():
     turso_token = os.environ.get("TURSO_AUTH_TOKEN")
 
     if turso_url and turso_token:
-        import libsql_experimental as libsql
-        conn = libsql.connect(
-            "local_replica.db",
-            sync_url=turso_url,
+        import libsql_client
+        from app import _TursoConn
+        client = libsql_client.create_client_sync(
+            turso_url,
             auth_token=turso_token,
         )
-        conn.sync()
-        return conn
+        return _TursoConn(client)
 
     return sqlite3.connect(DB_PATH)
 

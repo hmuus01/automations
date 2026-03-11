@@ -839,55 +839,74 @@ _TURSO_URL = os.environ.get("TURSO_DATABASE_URL")
 _TURSO_TOKEN = os.environ.get("TURSO_AUTH_TOKEN")
 
 
-class _DictRow:
-    """Portable row supporting row[0], row['col'], and dict(row)."""
-    __slots__ = ('_data', '_cols')
+class _TursoRow:
+    """Wraps a libsql-client Row so dict(row) works like sqlite3.Row."""
+    __slots__ = ('_row',)
 
-    def __init__(self, cursor, row):
-        self._data = row
-        self._cols = [col[0] for col in cursor.description]
+    def __init__(self, row):
+        self._row = row
 
     def __getitem__(self, key):
-        if isinstance(key, (int, slice)):
-            return self._data[key]
-        return self._data[self._cols.index(key)]
+        return self._row[key]
 
     def keys(self):
-        return list(self._cols)
+        return list(self._row._fields)
 
 
-class _SyncConn:
-    """Wraps a libsql connection to auto-sync with Turso on commit/close."""
+class _TursoCursor:
+    """Mimics a sqlite3 cursor over a libsql-client ClientSync."""
 
-    def __init__(self, conn):
-        self._conn = conn
+    def __init__(self, client):
+        self._client = client
+        self._rows = []
+
+    def execute(self, sql, params=None):
+        rs = self._client.execute(sql, params)
+        self._rows = [_TursoRow(r) for r in rs.rows]
+        return self
+
+    def fetchone(self):
+        if self._rows:
+            return self._rows.pop(0)
+        return None
+
+    def fetchall(self):
+        rows = self._rows
+        self._rows = []
+        return rows
+
+
+class _TursoConn:
+    """Wraps libsql-client ClientSync to look like a sqlite3 Connection."""
+
+    def __init__(self, client):
+        self._client = client
+
+    def execute(self, sql, params=None):
+        rs = self._client.execute(sql, params)
+        cursor = _TursoCursor(self._client)
+        cursor._rows = [_TursoRow(r) for r in rs.rows]
+        return cursor
+
+    def cursor(self):
+        return _TursoCursor(self._client)
 
     def commit(self):
-        self._conn.commit()
-        self._conn.sync()
+        pass  # libsql-client auto-commits
 
     def close(self):
-        try:
-            self._conn.sync()
-        except Exception:
-            pass
-
-    def __getattr__(self, name):
-        return getattr(self._conn, name)
+        self._client.close()
 
 
 def get_db():
     """Get database connection. Uses Turso if configured, otherwise local SQLite."""
     if _TURSO_URL and _TURSO_TOKEN:
-        import libsql_experimental as libsql
-        conn = libsql.connect(
-            "local_replica.db",
-            sync_url=_TURSO_URL,
+        import libsql_client
+        client = libsql_client.create_client_sync(
+            _TURSO_URL,
             auth_token=_TURSO_TOKEN,
         )
-        conn.sync()
-        conn.row_factory = _DictRow
-        return _SyncConn(conn)
+        return _TursoConn(client)
 
     conn = sqlite3.connect(CONFIG["DB_PATH"])
     conn.row_factory = sqlite3.Row
