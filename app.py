@@ -839,30 +839,101 @@ _TURSO_URL = os.environ.get("TURSO_DATABASE_URL")
 _TURSO_TOKEN = os.environ.get("TURSO_AUTH_TOKEN")
 
 
-class _TursoRow:
-    """Wraps a libsql-client Row so dict(row) works like sqlite3.Row."""
-    __slots__ = ('_row',)
+def _turso_url():
+    """Convert libsql:// URL to https:// pipeline endpoint."""
+    raw = _TURSO_URL
+    if raw.startswith("libsql://"):
+        host = raw[len("libsql://"):]
+    elif raw.startswith("https://"):
+        host = raw[len("https://"):]
+    else:
+        host = raw
+    host = host.rstrip("/")
+    return f"https://{host}/v2/pipeline"
 
-    def __init__(self, row):
-        self._row = row
+
+def _turso_execute(url, token, sql, params=None):
+    """Execute a single SQL statement via Turso HTTP API and return (columns, rows)."""
+    args = []
+    if params:
+        for v in params:
+            if v is None:
+                args.append({"type": "null", "value": None})
+            elif isinstance(v, int):
+                args.append({"type": "integer", "value": str(v)})
+            elif isinstance(v, float):
+                args.append({"type": "float", "value": v})
+            elif isinstance(v, bytes):
+                import base64
+                args.append({"type": "blob", "base64": base64.b64encode(v).decode()})
+            else:
+                args.append({"type": "text", "value": str(v)})
+
+    body = {"requests": [
+        {"type": "execute", "stmt": {"sql": sql, "args": args}},
+        {"type": "close"},
+    ]}
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    resp = requests.post(url, json=body, headers=headers, timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+
+    result = data["results"][0]
+    if result["type"] == "error":
+        raise RuntimeError(result["error"]["message"])
+
+    resp_result = result["response"]["result"]
+    cols = [c["name"] for c in resp_result.get("cols", [])]
+    raw_rows = resp_result.get("rows", [])
+    rows = []
+    for raw in raw_rows:
+        vals = []
+        for cell in raw:
+            if cell["type"] == "null":
+                vals.append(None)
+            elif cell["type"] == "integer":
+                vals.append(int(cell["value"]))
+            elif cell["type"] == "float":
+                vals.append(float(cell["value"]))
+            elif cell["type"] == "blob":
+                import base64
+                vals.append(base64.b64decode(cell["base64"]))
+            else:
+                vals.append(cell["value"])
+        rows.append(vals)
+    return cols, rows
+
+
+class _TursoRow:
+    """Row supporting row[0], row['col'], dict(row), and keys()."""
+    __slots__ = ('_values', '_col_map', '_col_names')
+
+    def __init__(self, values, col_names, col_map):
+        self._values = values
+        self._col_names = col_names
+        self._col_map = col_map
 
     def __getitem__(self, key):
-        return self._row[key]
+        if isinstance(key, (int, slice)):
+            return self._values[key]
+        return self._values[self._col_map[key]]
 
     def keys(self):
-        return list(self._row._fields)
+        return list(self._col_names)
 
 
 class _TursoCursor:
-    """Mimics a sqlite3 cursor over a libsql-client ClientSync."""
+    """Mimics a sqlite3 cursor over the Turso HTTP API."""
 
-    def __init__(self, client):
-        self._client = client
+    def __init__(self, url, token):
+        self._url = url
+        self._token = token
         self._rows = []
 
     def execute(self, sql, params=None):
-        rs = self._client.execute(sql, params)
-        self._rows = [_TursoRow(r) for r in rs.rows]
+        cols, raw_rows = _turso_execute(self._url, self._token, sql, params)
+        col_map = {name: i for i, name in enumerate(cols)}
+        self._rows = [_TursoRow(r, cols, col_map) for r in raw_rows]
         return self
 
     def fetchone(self):
@@ -877,36 +948,31 @@ class _TursoCursor:
 
 
 class _TursoConn:
-    """Wraps libsql-client ClientSync to look like a sqlite3 Connection."""
+    """Wraps the Turso HTTP API to look like a sqlite3 Connection."""
 
-    def __init__(self, client):
-        self._client = client
+    def __init__(self, url, token):
+        self._url = url
+        self._token = token
 
     def execute(self, sql, params=None):
-        rs = self._client.execute(sql, params)
-        cursor = _TursoCursor(self._client)
-        cursor._rows = [_TursoRow(r) for r in rs.rows]
+        cursor = _TursoCursor(self._url, self._token)
+        cursor.execute(sql, params)
         return cursor
 
     def cursor(self):
-        return _TursoCursor(self._client)
+        return _TursoCursor(self._url, self._token)
 
     def commit(self):
-        pass  # libsql-client auto-commits
+        pass  # each HTTP request auto-commits
 
     def close(self):
-        self._client.close()
+        pass  # no persistent connection to close
 
 
 def get_db():
     """Get database connection. Uses Turso if configured, otherwise local SQLite."""
     if _TURSO_URL and _TURSO_TOKEN:
-        import libsql_client
-        client = libsql_client.create_client_sync(
-            _TURSO_URL,
-            auth_token=_TURSO_TOKEN,
-        )
-        return _TursoConn(client)
+        return _TursoConn(_turso_url(), _TURSO_TOKEN)
 
     conn = sqlite3.connect(CONFIG["DB_PATH"])
     conn.row_factory = sqlite3.Row

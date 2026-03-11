@@ -3,4 +3,3 @@ flask-cors==5.0.1
 flask-login==0.6.3
 requests==2.32.3
 gunicorn==23.0.0
-libsql-client

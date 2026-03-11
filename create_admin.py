@@ -19,13 +19,8 @@ def get_connection():
     turso_token = os.environ.get("TURSO_AUTH_TOKEN")
 
     if turso_url and turso_token:
-        import libsql_client
-        from app import _TursoConn
-        client = libsql_client.create_client_sync(
-            turso_url,
-            auth_token=turso_token,
-        )
-        return _TursoConn(client)
+        from app import _TursoConn, _turso_url
+        return _TursoConn(_turso_url(), turso_token)
 
     return sqlite3.connect(DB_PATH)
 
@@ -61,8 +56,6 @@ def create_user(email, password, name):
         (email, password_hash, name),
     )
     conn.commit()
-    if hasattr(conn, 'sync'):
-        conn.sync()
     print(f"Admin user created: {name} <{email}>")
     conn.close()
 
