@@ -897,6 +897,10 @@ def _turso_execute(url, token, sql, params=None):
 
     resp_result = result["response"]["result"]
     cols = [c["name"] for c in resp_result.get("cols", [])]
+    affected = resp_result.get("affected_row_count", 0)
+    last_id = resp_result.get("last_insert_rowid")
+    if last_id is not None:
+        last_id = int(last_id) if isinstance(last_id, str) else last_id
     raw_rows = resp_result.get("rows", [])
     rows = []
     for raw in raw_rows:
@@ -914,7 +918,7 @@ def _turso_execute(url, token, sql, params=None):
             else:
                 vals.append(cell["value"])
         rows.append(vals)
-    return cols, rows
+    return cols, rows, affected, last_id
 
 
 class _TursoRow:
@@ -942,11 +946,15 @@ class _TursoCursor:
         self._url = url
         self._token = token
         self._rows = []
+        self.rowcount = -1
+        self.lastrowid = None
 
     def execute(self, sql, params=None):
-        cols, raw_rows = _turso_execute(self._url, self._token, sql, params)
+        cols, raw_rows, affected, last_id = _turso_execute(self._url, self._token, sql, params)
         col_map = {name: i for i, name in enumerate(cols)}
         self._rows = [_TursoRow(r, cols, col_map) for r in raw_rows]
+        self.rowcount = affected
+        self.lastrowid = last_id
         return self
 
     def fetchone(self):
