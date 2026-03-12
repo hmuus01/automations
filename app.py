@@ -854,11 +854,12 @@ def _turso_url():
 
 def _turso_execute(url, token, sql, params=None):
     """Execute a single SQL statement via Turso HTTP API and return (columns, rows)."""
-    args = []
+    stmt = {"sql": sql}
     if params:
+        args = []
         for v in params:
             if v is None:
-                args.append({"type": "null", "value": None})
+                args.append({"type": "null"})
             elif isinstance(v, int):
                 args.append({"type": "integer", "value": str(v)})
             elif isinstance(v, float):
@@ -868,19 +869,31 @@ def _turso_execute(url, token, sql, params=None):
                 args.append({"type": "blob", "base64": base64.b64encode(v).decode()})
             else:
                 args.append({"type": "text", "value": str(v)})
+        stmt["args"] = args
 
-    body = {"requests": [
-        {"type": "execute", "stmt": {"sql": sql, "args": args}},
-        {"type": "close"},
-    ]}
+    body = {
+        "baton": None,
+        "requests": [
+            {"type": "execute", "stmt": stmt},
+            {"type": "close"},
+        ],
+    }
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    resp = requests.post(url, json=body, headers=headers, timeout=30)
-    resp.raise_for_status()
-    data = resp.json()
+    try:
+        resp = requests.post(url, json=body, headers=headers, timeout=30)
+    except Exception as e:
+        logger.error("Turso HTTP request failed: %s", e)
+        raise
 
+    if resp.status_code != 200:
+        logger.error("Turso HTTP %s: %s", resp.status_code, resp.text[:500])
+        resp.raise_for_status()
+
+    data = resp.json()
     result = data["results"][0]
     if result["type"] == "error":
-        raise RuntimeError(result["error"]["message"])
+        msg = result["error"].get("message", str(result["error"]))
+        raise RuntimeError(msg)
 
     resp_result = result["response"]["result"]
     cols = [c["name"] for c in resp_result.get("cols", [])]
@@ -972,7 +985,9 @@ class _TursoConn:
 def get_db():
     """Get database connection. Uses Turso if configured, otherwise local SQLite."""
     if _TURSO_URL and _TURSO_TOKEN:
-        return _TursoConn(_turso_url(), _TURSO_TOKEN)
+        url = _turso_url()
+        logger.info("Connecting to Turso at %s", url)
+        return _TursoConn(url, _TURSO_TOKEN)
 
     conn = sqlite3.connect(CONFIG["DB_PATH"])
     conn.row_factory = sqlite3.Row
