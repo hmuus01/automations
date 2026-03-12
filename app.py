@@ -1338,7 +1338,7 @@ def init_database():
     # Migrate: add is_admin column to users if missing
     try:
         cursor.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
-    except sqlite3.OperationalError:
+    except Exception:
         pass  # Column already exists
 
     conn.commit()
@@ -1361,11 +1361,11 @@ def migrate_flag_categories():
     for table in ['jobs_daily_summary', 'jobs_weekly_summary', 'jobs_monthly_summary']:
         try:
             cursor.execute(f"ALTER TABLE {table} ADD COLUMN sent_ai_count INTEGER DEFAULT 0")
-        except sqlite3.OperationalError:
+        except Exception:
             pass  # Column already exists
         try:
             cursor.execute(f"ALTER TABLE {table} ADD COLUMN sent_manual_count INTEGER DEFAULT 0")
-        except sqlite3.OperationalError:
+        except Exception:
             pass  # Column already exists
 
     # Update Sent_AI for "Report Sent Via AI"
@@ -1405,11 +1405,11 @@ def alarm_migrate_flag_categories():
     for table in ['alarm_jobs_daily_summary', 'alarm_jobs_weekly_summary', 'alarm_jobs_monthly_summary']:
         try:
             cursor.execute(f"ALTER TABLE {table} ADD COLUMN sent_ai_count INTEGER DEFAULT 0")
-        except sqlite3.OperationalError:
+        except Exception:
             pass  # Column already exists
         try:
             cursor.execute(f"ALTER TABLE {table} ADD COLUMN sent_manual_count INTEGER DEFAULT 0")
-        except sqlite3.OperationalError:
+        except Exception:
             pass  # Column already exists
 
     # Update Sent_AI for "Alarm report sent by AI"
@@ -1447,11 +1447,11 @@ def patrol_migrate_flag_categories():
     for table in ['patrol_jobs_daily_summary', 'patrol_jobs_weekly_summary', 'patrol_jobs_monthly_summary']:
         try:
             cursor.execute(f"ALTER TABLE {table} ADD COLUMN sent_ai_count INTEGER DEFAULT 0")
-        except sqlite3.OperationalError:
+        except Exception:
             pass  # Column already exists
         try:
             cursor.execute(f"ALTER TABLE {table} ADD COLUMN sent_manual_count INTEGER DEFAULT 0")
-        except sqlite3.OperationalError:
+        except Exception:
             pass  # Column already exists
 
     # Update Sent_AI for "No patrol incident identified by AI" and "Patrol Incident identified by AI"
