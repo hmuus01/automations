@@ -852,24 +852,72 @@ def _turso_url():
     return f"https://{host}/v2/pipeline"
 
 
+def _turso_make_args(params):
+    """Convert Python params tuple to Turso HTTP API args list."""
+    args = []
+    for v in params:
+        if v is None:
+            args.append({"type": "null"})
+        elif isinstance(v, int):
+            args.append({"type": "integer", "value": str(v)})
+        elif isinstance(v, float):
+            args.append({"type": "float", "value": v})
+        elif isinstance(v, bytes):
+            import base64
+            args.append({"type": "blob", "base64": base64.b64encode(v).decode()})
+        else:
+            args.append({"type": "text", "value": str(v)})
+    return args
+
+
+def _turso_batch(url, token, statements):
+    """Execute multiple SQL statements in a single Turso HTTP request.
+
+    statements: list of (sql, params) tuples.
+    Returns list of (affected_row_count, last_insert_rowid) per statement.
+    """
+    reqs = []
+    for sql, params in statements:
+        stmt = {"sql": sql}
+        if params:
+            stmt["args"] = _turso_make_args(params)
+        reqs.append({"type": "execute", "stmt": stmt})
+    reqs.append({"type": "close"})
+
+    body = {"baton": None, "requests": reqs}
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    try:
+        resp = requests.post(url, json=body, headers=headers, timeout=60)
+    except Exception as e:
+        logger.error("Turso batch request failed: %s", e)
+        raise
+
+    if resp.status_code != 200:
+        logger.error("Turso batch HTTP %s: %s", resp.status_code, resp.text[:500])
+        resp.raise_for_status()
+
+    data = resp.json()
+    results = []
+    for i, result in enumerate(data["results"]):
+        if result["type"] == "error":
+            msg = result["error"].get("message", str(result["error"]))
+            raise RuntimeError(f"Batch stmt {i}: {msg}")
+        if result.get("response", {}).get("type") == "close":
+            continue
+        r = result["response"]["result"]
+        affected = r.get("affected_row_count", 0)
+        last_id = r.get("last_insert_rowid")
+        if last_id is not None:
+            last_id = int(last_id) if isinstance(last_id, str) else last_id
+        results.append((affected, last_id))
+    return results
+
+
 def _turso_execute(url, token, sql, params=None):
     """Execute a single SQL statement via Turso HTTP API and return (columns, rows)."""
     stmt = {"sql": sql}
     if params:
-        args = []
-        for v in params:
-            if v is None:
-                args.append({"type": "null"})
-            elif isinstance(v, int):
-                args.append({"type": "integer", "value": str(v)})
-            elif isinstance(v, float):
-                args.append({"type": "float", "value": v})
-            elif isinstance(v, bytes):
-                import base64
-                args.append({"type": "blob", "base64": base64.b64encode(v).decode()})
-            else:
-                args.append({"type": "text", "value": str(v)})
-        stmt["args"] = args
+        stmt["args"] = _turso_make_args(params)
 
     body = {
         "baton": None,
@@ -982,6 +1030,10 @@ class _TursoConn:
 
     def cursor(self):
         return _TursoCursor(self._url, self._token)
+
+    def batch_execute(self, statements):
+        """Execute many (sql, params) tuples in one HTTP request. Returns list of (affected, last_id)."""
+        return _turso_batch(self._url, self._token, statements)
 
     def commit(self):
         pass  # each HTTP request auto-commits
@@ -1658,24 +1710,69 @@ def classify_patrol_flag(current_flag: Optional[str]) -> str:
     return "Other"
 
 
+_UPSERT_BATCH_SIZE = 50
+
+
+def _build_job_params(job, classify_fn):
+    """Build the params tuple for a job INSERT OR REPLACE."""
+    current_flag = job.get("CurrentFlag")
+    flag_category = classify_fn(current_flag)
+    return (
+        job.get("JobId"), job.get("Ref"), job.get("Type"), job.get("JobTypeId"),
+        job.get("Category"), job.get("JobCategoryId"),
+        job.get("Contact"), job.get("ContactId"), job.get("ContactParentId"),
+        job.get("Postcode"), job.get("Location"), job.get("Resource"),
+        job.get("Status"), job.get("StatusId"), job.get("StatusDate"),
+        job.get("StatusComment"), job.get("PlannedStart"), job.get("PlannedEnd"),
+        job.get("Duration"), job.get("RealStart"), job.get("RealEnd"),
+        job.get("RealDuration"), job.get("DueDate"), job.get("Created"),
+        job.get("Scheduled"), current_flag, flag_category,
+        job.get("Description"), job.get("JobPO"), job.get("Actioned"),
+        json.dumps(job), datetime.utcnow().isoformat()
+    )
+
+
 def upsert_jobs(jobs: List[Dict]) -> Tuple[int, int]:
     """Insert or update jobs."""
     conn = get_db()
+    valid_jobs = [j for j in jobs if j.get("JobId")]
+
+    # If using Turso, batch all statements into a few HTTP requests
+    if hasattr(conn, 'batch_execute'):
+        # Get existing IDs in one query
+        cursor = conn.cursor()
+        cursor.execute("SELECT job_id FROM jobs_raw")
+        existing_ids = {row[0] for row in cursor.fetchall()}
+
+        sql = """INSERT OR REPLACE INTO jobs_raw (
+                job_id, job_ref, job_type, job_type_id, job_category, job_category_id,
+                contact, contact_id, contact_parent_id, postcode, location, resource,
+                status, status_id, status_date, status_comment,
+                planned_start, planned_end, duration,
+                real_start, real_end, real_duration, due_date,
+                created, scheduled, current_flag, flag_category,
+                description, job_po, actioned, raw_json, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+
+        statements = [(sql, _build_job_params(j, classify_flag)) for j in valid_jobs]
+        for i in range(0, len(statements), _UPSERT_BATCH_SIZE):
+            conn.batch_execute(statements[i:i + _UPSERT_BATCH_SIZE])
+
+        updated = sum(1 for j in valid_jobs if j.get("JobId") in existing_ids)
+        inserted = len(valid_jobs) - updated
+        conn.close()
+        return inserted, updated
+
+    # Local SQLite path — original loop
     cursor = conn.cursor()
     inserted = 0
     updated = 0
-    
-    for job in jobs:
+    for job in valid_jobs:
         job_id = job.get("JobId")
-        if not job_id:
-            continue
-        
         cursor.execute("SELECT 1 FROM jobs_raw WHERE job_id = ?", (job_id,))
         exists = cursor.fetchone() is not None
-        
         current_flag = job.get("CurrentFlag")
         flag_category = classify_flag(current_flag)
-        
         cursor.execute("""
             INSERT OR REPLACE INTO jobs_raw (
                 job_id, job_ref, job_type, job_type_id, job_category, job_category_id,
@@ -1699,12 +1796,10 @@ def upsert_jobs(jobs: List[Dict]) -> Tuple[int, int]:
             job.get("Description"), job.get("JobPO"), job.get("Actioned"),
             json.dumps(job), datetime.utcnow().isoformat()
         ))
-        
         if exists:
             updated += 1
         else:
             inserted += 1
-    
     conn.commit()
     conn.close()
     return inserted, updated
@@ -1785,21 +1880,41 @@ def refresh_summaries():
 def alarm_upsert_jobs(jobs: List[Dict]) -> Tuple[int, int]:
     """Insert or update alarm jobs."""
     conn = get_db()
+    valid_jobs = [j for j in jobs if j.get("JobId")]
+
+    if hasattr(conn, 'batch_execute'):
+        cursor = conn.cursor()
+        cursor.execute("SELECT job_id FROM alarm_jobs_raw")
+        existing_ids = {row[0] for row in cursor.fetchall()}
+
+        sql = """INSERT OR REPLACE INTO alarm_jobs_raw (
+                job_id, job_ref, job_type, job_type_id, job_category, job_category_id,
+                contact, contact_id, contact_parent_id, postcode, location, resource,
+                status, status_id, status_date, status_comment,
+                planned_start, planned_end, duration,
+                real_start, real_end, real_duration, due_date,
+                created, scheduled, current_flag, flag_category,
+                description, job_po, actioned, raw_json, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+
+        statements = [(sql, _build_job_params(j, classify_alarm_flag)) for j in valid_jobs]
+        for i in range(0, len(statements), _UPSERT_BATCH_SIZE):
+            conn.batch_execute(statements[i:i + _UPSERT_BATCH_SIZE])
+
+        updated = sum(1 for j in valid_jobs if j.get("JobId") in existing_ids)
+        inserted = len(valid_jobs) - updated
+        conn.close()
+        return inserted, updated
+
     cursor = conn.cursor()
     inserted = 0
     updated = 0
-
-    for job in jobs:
+    for job in valid_jobs:
         job_id = job.get("JobId")
-        if not job_id:
-            continue
-
         cursor.execute("SELECT 1 FROM alarm_jobs_raw WHERE job_id = ?", (job_id,))
         exists = cursor.fetchone() is not None
-
         current_flag = job.get("CurrentFlag")
         flag_category = classify_alarm_flag(current_flag)
-
         cursor.execute("""
             INSERT OR REPLACE INTO alarm_jobs_raw (
                 job_id, job_ref, job_type, job_type_id, job_category, job_category_id,
@@ -1823,12 +1938,10 @@ def alarm_upsert_jobs(jobs: List[Dict]) -> Tuple[int, int]:
             job.get("Description"), job.get("JobPO"), job.get("Actioned"),
             json.dumps(job), datetime.utcnow().isoformat()
         ))
-
         if exists:
             updated += 1
         else:
             inserted += 1
-
     conn.commit()
     conn.close()
     return inserted, updated
@@ -1907,24 +2020,63 @@ def alarm_refresh_summaries():
     conn.close()
 
 
+def _build_patrol_job_params(job, classify_fn):
+    """Build params tuple for a patrol job INSERT OR REPLACE (includes job_result)."""
+    current_flag = job.get("CurrentFlag")
+    flag_category = classify_fn(current_flag)
+    return (
+        job.get("JobId"), job.get("Ref"), job.get("Type"), job.get("JobTypeId"),
+        job.get("Category"), job.get("JobCategoryId"),
+        job.get("Contact"), job.get("ContactId"), job.get("ContactParentId"),
+        job.get("Postcode"), job.get("Location"), job.get("Resource"),
+        job.get("Status"), job.get("StatusId"), job.get("StatusDate"),
+        job.get("StatusComment"), job.get("PlannedStart"), job.get("PlannedEnd"),
+        job.get("Duration"), job.get("RealStart"), job.get("RealEnd"),
+        job.get("RealDuration"), job.get("DueDate"), job.get("Created"),
+        job.get("Scheduled"), current_flag, flag_category,
+        job.get("Description"), job.get("JobPO"), job.get("Actioned"),
+        job.get("JobResult"), json.dumps(job), datetime.utcnow().isoformat()
+    )
+
+
 def patrol_upsert_jobs(jobs: List[Dict]) -> Tuple[int, int]:
     """Insert or update patrol jobs."""
     conn = get_db()
+    valid_jobs = [j for j in jobs if j.get("JobId")]
+
+    if hasattr(conn, 'batch_execute'):
+        cursor = conn.cursor()
+        cursor.execute("SELECT job_id FROM patrol_jobs_raw")
+        existing_ids = {row[0] for row in cursor.fetchall()}
+
+        sql = """INSERT OR REPLACE INTO patrol_jobs_raw (
+                job_id, job_ref, job_type, job_type_id, job_category, job_category_id,
+                contact, contact_id, contact_parent_id, postcode, location, resource,
+                status, status_id, status_date, status_comment,
+                planned_start, planned_end, duration,
+                real_start, real_end, real_duration, due_date,
+                created, scheduled, current_flag, flag_category,
+                description, job_po, actioned, job_result, raw_json, last_synced
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+
+        statements = [(sql, _build_patrol_job_params(j, classify_patrol_flag)) for j in valid_jobs]
+        for i in range(0, len(statements), _UPSERT_BATCH_SIZE):
+            conn.batch_execute(statements[i:i + _UPSERT_BATCH_SIZE])
+
+        updated = sum(1 for j in valid_jobs if j.get("JobId") in existing_ids)
+        inserted = len(valid_jobs) - updated
+        conn.close()
+        return inserted, updated
+
     cursor = conn.cursor()
     inserted = 0
     updated = 0
-
-    for job in jobs:
+    for job in valid_jobs:
         job_id = job.get("JobId")
-        if not job_id:
-            continue
-
         cursor.execute("SELECT 1 FROM patrol_jobs_raw WHERE job_id = ?", (job_id,))
         exists = cursor.fetchone() is not None
-
         current_flag = job.get("CurrentFlag")
         flag_category = classify_patrol_flag(current_flag)
-
         cursor.execute("""
             INSERT OR REPLACE INTO patrol_jobs_raw (
                 job_id, job_ref, job_type, job_type_id, job_category, job_category_id,
@@ -1948,12 +2100,10 @@ def patrol_upsert_jobs(jobs: List[Dict]) -> Tuple[int, int]:
             job.get("Description"), job.get("JobPO"), job.get("Actioned"),
             job.get("JobResult"), json.dumps(job), datetime.utcnow().isoformat()
         ))
-
         if exists:
             updated += 1
         else:
             inserted += 1
-
     conn.commit()
     conn.close()
     return inserted, updated
