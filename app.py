@@ -119,12 +119,24 @@ login_manager.login_view = "login"
 class User(UserMixin):
     """User model backed by SQLite."""
 
-    def __init__(self, id, email, password_hash, name, is_admin=False):
+    def __init__(self, id, email, password_hash, name, is_admin=False, last_login=None, login_count=0):
         self.id = id
         self.email = email
         self.password_hash = password_hash
         self.name = name
         self.is_admin = bool(is_admin)
+        self.last_login = last_login
+        self.login_count = login_count or 0
+
+    @property
+    def last_login_formatted(self):
+        if not self.last_login:
+            return "Never"
+        try:
+            dt = datetime.strptime(self.last_login, "%Y-%m-%d %H:%M:%S")
+            return dt.strftime("%d %b %Y, %H:%M")
+        except (ValueError, TypeError):
+            return self.last_login
 
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
@@ -383,6 +395,13 @@ def login():
                 from flask import session
                 session.permanent = True
                 login_user(user, remember=False)
+                conn = get_db()
+                conn.execute(
+                    "UPDATE users SET last_login = ?, login_count = COALESCE(login_count, 0) + 1 WHERE id = ?",
+                    (datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), user.id)
+                )
+                conn.commit()
+                conn.close()
                 next_page = request.args.get("next") or url_for("index")
                 return redirect(next_page)
         error = "Invalid email or password"
@@ -655,6 +674,8 @@ ADMIN_PAGE = """
                         <th>Name</th>
                         <th>Email</th>
                         <th>Admin</th>
+                        <th>Last Login</th>
+                        <th>Logins</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
@@ -671,6 +692,14 @@ ADMIN_PAGE = """
                                 {{ "Yes" if user.is_admin else "No" }}
                             </span>
                         </td>
+                        <td style="font-size:0.82rem;color:var(--text-secondary)">
+                            {% if user.last_login %}
+                                {{ user.last_login_formatted }}
+                            {% else %}
+                                Never
+                            {% endif %}
+                        </td>
+                        <td style="font-size:0.82rem;color:var(--text-secondary)">{{ user.login_count }}</td>
                         <td>
                             <div class="actions">
                                 <button class="btn btn-blue" onclick="togglePw({{ user.id }})">Change Password</button>
@@ -742,9 +771,9 @@ def admin_users():
         flash("Access denied", "error")
         return redirect(url_for("index"))
     conn = get_db()
-    rows = conn.execute("SELECT id, email, password_hash, name, is_admin FROM users ORDER BY id").fetchall()
+    rows = conn.execute("SELECT id, email, password_hash, name, is_admin, last_login, login_count FROM users ORDER BY id").fetchall()
     conn.close()
-    users = [User(r[0], r[1], r[2], r[3], r[4]) for r in rows]
+    users = [User(r[0], r[1], r[2], r[3], r[4], r[5], r[6]) for r in rows]
     return render_template_string(ADMIN_PAGE, users=users, current_user=current_user)
 
 
@@ -1400,6 +1429,16 @@ def init_database():
         cursor.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
     except Exception:
         pass  # Column already exists
+
+    # Migrate: add last_login and login_count columns
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN last_login TEXT")
+    except Exception:
+        pass
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN login_count INTEGER DEFAULT 0")
+    except Exception:
+        pass
 
     conn.commit()
     conn.close()
