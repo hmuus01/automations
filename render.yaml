@@ -22,5 +22,7 @@ services:
         sync: false
       - key: TURSO_AUTH_TOKEN
         sync: false
+      - key: ALLOWED_ORIGINS
+        value: https://www.frgautomation.com,https://frgautomation.com,https://automations-unl2.onrender.com
       - key: PYTHON_VERSION
         value: 3.11.11

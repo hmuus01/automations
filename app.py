@@ -30,9 +30,13 @@ import requests
 from requests.auth import HTTPBasicAuth
 
 import re
+from urllib.parse import urlparse
 from flask import Flask, jsonify, request, send_from_directory, render_template_string, redirect, url_for, flash
 from flask_cors import CORS
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
+from flask_wtf.csrf import CSRFProtect
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from werkzeug.security import generate_password_hash, check_password_hash
 
 # ============================================================================
@@ -104,8 +108,67 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__, static_folder='static')
 app.secret_key = os.environ.get("SECRET_KEY", "dev-change-me-in-production")
+if app.secret_key == "dev-change-me-in-production":
+    logger.warning("Using default SECRET_KEY — set SECRET_KEY env var in production!")
 app.permanent_session_lifetime = timedelta(hours=8)
-CORS(app)
+
+# --- Session cookie security ---
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SECURE'] = os.environ.get("FLASK_ENV") != "development"
+app.config['WTF_CSRF_TIME_LIMIT'] = None  # CSRF tokens valid for session lifetime
+
+# --- CORS: restrict to our own domain ---
+_ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "https://www.frgautomation.com,https://frgautomation.com,https://automations-unl2.onrender.com")
+CORS(app, origins=_ALLOWED_ORIGINS.split(","), supports_credentials=True)
+
+# --- CSRF protection ---
+csrf = CSRFProtect(app)
+
+# --- Rate limiting ---
+limiter = Limiter(get_remote_address, app=app, default_limits=["200 per hour"], storage_uri="memory://")
+
+
+# --- Security headers ---
+@app.after_request
+def add_security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
+    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    response.headers['Content-Security-Policy'] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data:; "
+        "connect-src 'self'"
+    )
+    return response
+
+
+# --- Error handlers (prevent stack trace leaks) ---
+@app.errorhandler(404)
+def error_404(e):
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "Not found"}), 404
+    return "Not found", 404
+
+
+@app.errorhandler(500)
+def error_500(e):
+    logger.error("Internal server error: %s", e)
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "Internal server error"}), 500
+    return "Internal server error", 500
+
+
+@app.errorhandler(429)
+def error_429(e):
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "Too many requests, please try again later"}), 429
+    return "Too many requests, please try again later", 429
 
 # ============================================================================
 # AUTHENTICATION
@@ -311,6 +374,7 @@ LOGIN_PAGE = """
         <p class="subtitle">Sign in to access the dashboard</p>
         {% if error %}<div class="error">{{ error }}</div>{% endif %}
         <form method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <label for="email">Email</label>
             <input type="email" id="email" name="email" required
                    placeholder="you@example.com" autofocus>
@@ -381,7 +445,29 @@ def _sanitise_login_password(raw):
     return raw
 
 
+def _validate_password_strength(password):
+    """Check password meets minimum strength requirements. Returns error message or None."""
+    if len(password) < 8 or len(password) > 128:
+        return "Password must be 8-128 characters"
+    if not re.search(r'[A-Z]', password):
+        return "Password must contain at least one uppercase letter"
+    if not re.search(r'[a-z]', password):
+        return "Password must contain at least one lowercase letter"
+    if not re.search(r'[0-9]', password):
+        return "Password must contain at least one digit"
+    return None
+
+
+def _is_safe_redirect(target):
+    """Validate redirect target is a relative URL (prevent open redirect)."""
+    if not target:
+        return False
+    parsed = urlparse(target)
+    return parsed.scheme == '' and parsed.netloc == '' and not target.startswith('//')
+
+
 @app.route("/login", methods=["GET", "POST"])
+@limiter.limit("10 per minute")
 def login():
     if current_user.is_authenticated:
         return redirect(url_for("index"))
@@ -402,7 +488,9 @@ def login():
                 )
                 conn.commit()
                 conn.close()
-                next_page = request.args.get("next") or url_for("index")
+                next_page = request.args.get("next", "")
+                if not _is_safe_redirect(next_page):
+                    next_page = url_for("index")
                 return redirect(next_page)
         error = "Invalid email or password"
     return render_template_string(LOGIN_PAGE, error=error)
@@ -706,11 +794,13 @@ ADMIN_PAGE = """
                                 {% if user.id != current_user.id %}
                                 <form method="POST" action="/admin/users/delete/{{ user.id }}"
                                       onsubmit="return confirm('Delete {{ user.name }}?')">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <button type="submit" class="btn btn-red">Delete</button>
                                 </form>
                                 {% endif %}
                             </div>
                             <form class="pw-form" id="pw-{{ user.id }}" method="POST" action="/admin/users/password/{{ user.id }}">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                 <input type="password" name="new_password" placeholder="New password (min 8)" required minlength="8">
                                 <button type="submit" class="btn btn-primary" style="padding:7px 14px;font-size:0.78rem;">Save</button>
                             </form>
@@ -725,6 +815,7 @@ ADMIN_PAGE = """
         <div class="card">
             <h2>Add New User</h2>
             <form method="POST" action="/admin/users/add">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="form-grid">
                     <div class="form-group">
                         <label for="name">Full Name</label>
@@ -797,8 +888,9 @@ def admin_add_user():
         flash("Valid email is required (max 254 chars, no SQL keywords)", "error")
         return redirect(url_for("admin_users"))
 
-    if len(password) < 8 or len(password) > 128:
-        flash("Password must be 8-128 characters", "error")
+    pw_error = _validate_password_strength(password)
+    if pw_error:
+        flash(pw_error, "error")
         return redirect(url_for("admin_users"))
 
     conn = get_db()
@@ -845,8 +937,9 @@ def admin_change_password(user_id):
         return redirect(url_for("index"))
 
     new_password = request.form.get("new_password", "")
-    if len(new_password) < 8 or len(new_password) > 128:
-        flash("Password must be 8-128 characters", "error")
+    pw_error = _validate_password_strength(new_password)
+    if pw_error:
+        flash(pw_error, "error")
         return redirect(url_for("admin_users"))
 
     conn = get_db()
@@ -2490,7 +2583,9 @@ def get_jobs():
     return jsonify(data)
 
 @app.route('/api/sync', methods=['POST'])
+@csrf.exempt
 @login_required
+@limiter.limit("3 per minute")
 def sync_jobs():
     """Trigger a sync from BigChange API."""
     data = request.json or {}
@@ -2550,7 +2645,8 @@ def sync_jobs():
         conn.commit()
         conn.close()
         
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.error("Sync error: %s", e)
+        return jsonify({"success": False, "error": "Sync failed. Check server logs for details."}), 500
 
 @app.route('/api/config')
 @login_required
@@ -2826,7 +2922,9 @@ def alarm_get_jobs():
     return jsonify(data)
 
 @app.route('/api/alarm/sync', methods=['POST'])
+@csrf.exempt
 @login_required
+@limiter.limit("3 per minute")
 def alarm_sync_jobs():
     """Trigger a sync of alarm activation jobs from BigChange API."""
     data = request.json or {}
@@ -2886,7 +2984,8 @@ def alarm_sync_jobs():
         conn.commit()
         conn.close()
 
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.error("Sync error: %s", e)
+        return jsonify({"success": False, "error": "Sync failed. Check server logs for details."}), 500
 
 @app.route('/api/alarm/config')
 @login_required
@@ -3178,7 +3277,9 @@ def patrol_get_jobs():
     return jsonify(data)
 
 @app.route('/api/patrol/sync', methods=['POST'])
+@csrf.exempt
 @login_required
+@limiter.limit("3 per minute")
 def patrol_sync_jobs():
     """Trigger a sync of patrol jobs from BigChange API."""
     data = request.json or {}
@@ -3242,7 +3343,8 @@ def patrol_sync_jobs():
         conn.commit()
         conn.close()
 
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.error("Sync error: %s", e)
+        return jsonify({"success": False, "error": "Sync failed. Check server logs for details."}), 500
 
 @app.route('/api/patrol/config')
 @login_required
