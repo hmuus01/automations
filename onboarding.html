@@ -243,8 +243,9 @@
             </div>
         </div>
         <div class="header-actions">
-            <button class="btn btn-primary" onclick="reloadData()">
-                <span>&#8635;</span> Reload Data
+            <input type="file" id="excel-upload" accept=".xlsx" style="display:none" onchange="uploadExcel(this)">
+            <button class="btn btn-primary" onclick="document.getElementById('excel-upload').click()">
+                <span>&#8679;</span> Upload Excel
             </button>
             <a href="/logout" class="btn btn-secondary" style="text-decoration:none;margin-left:4px;">Logout</a>
         </div>
@@ -395,12 +396,25 @@
         }
     }
 
-    async function reloadData() {
+    async function uploadExcel(input) {
+        if (!input.files || !input.files[0]) return;
+        const file = input.files[0];
+        if (!file.name.toLowerCase().endsWith('.xlsx')) {
+            alert('Please select an .xlsx file');
+            input.value = '';
+            return;
+        }
+        const formData = new FormData();
+        formData.append('file', file);
         try {
-            await fetch('/api/onboarding/reload', { method: 'POST' });
-            location.reload();
+            const resp = await fetch('/api/onboarding/upload', { method: 'POST', body: formData });
+            const json = await resp.json();
+            if (!json.success) { alert('Upload failed: ' + json.error); return; }
+            alert('Uploaded ' + json.count + ' rows successfully');
+            input.value = '';
+            loadData();
         } catch (e) {
-            alert('Reload failed: ' + e.message);
+            alert('Upload failed: ' + e.message);
         }
     }
 

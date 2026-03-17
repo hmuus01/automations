@@ -1518,6 +1518,34 @@ def init_database():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_patrol_jobs_current_flag ON patrol_jobs_raw(current_flag)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_patrol_jobs_flag_category ON patrol_jobs_raw(flag_category)")
 
+    # Onboarding table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS onboarding (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            month TEXT,
+            name TEXT,
+            student_on_visa TEXT,
+            pin_tg TEXT,
+            screening_completion_date TEXT,
+            actual_start_date TEXT,
+            rate TEXT,
+            role TEXT,
+            line_manager TEXT,
+            client_location TEXT,
+            hours TEXT,
+            relief_perm TEXT,
+            nok TEXT,
+            add_to_watchlist TEXT,
+            sage TEXT,
+            payroll TEXT,
+            mq TEXT,
+            induction_docs_sent TEXT,
+            timegate_info TEXT,
+            contract TEXT,
+            wtd TEXT
+        )
+    """)
+
     # Migrate: add is_admin column to users if missing
     try:
         cursor.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
@@ -3364,14 +3392,8 @@ def patrol_get_config():
 # ============================================================================
 
 import openpyxl
-import threading
-import time as _time
+import io
 
-_ONBOARDING_FILE = os.environ.get("ONBOARDING_FILE", os.path.join(os.path.dirname(os.path.abspath(__file__)), "Onboarding Checklist 2025.xlsx"))
-_ONBOARDING_CACHE = {"data": None, "loaded_at": None}
-_ONBOARDING_LOCK = threading.Lock()
-_ONBOARDING_MONTHS = ["Jan", "Feb", "March", "April", "May", "June",
-                       "July", "August", "September", "October", "November", "December"]
 _ONBOARDING_COL_MAP = {
     1: "name", 2: "student_on_visa", 3: "pin_tg", 4: "screening_completion_date",
     5: "actual_start_date", 6: "rate", 7: "role", 8: "line_manager",
@@ -3380,18 +3402,19 @@ _ONBOARDING_COL_MAP = {
     17: "induction_docs_sent", 18: "timegate_info", 19: "contract", 20: "wtd",
 }
 
-def _load_onboarding():
-    """Read the onboarding Excel file and cache the data."""
-    path = _ONBOARDING_FILE
-    if not os.path.isfile(path):
-        logger.warning("Onboarding file not found: %s", path)
-        return []
+_ONBOARDING_FIELDS = ["month", "name", "student_on_visa", "pin_tg",
+    "screening_completion_date", "actual_start_date", "rate", "role",
+    "line_manager", "client_location", "hours", "relief_perm", "nok",
+    "add_to_watchlist", "sage", "payroll", "mq", "induction_docs_sent",
+    "timegate_info", "contract", "wtd"]
 
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+def _parse_onboarding_excel(file_bytes):
+    """Parse onboarding Excel file bytes into list of row dicts."""
+    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
     rows = []
     for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
-        for row_idx, row in enumerate(ws.iter_rows(min_row=2, max_col=20, values_only=True), start=2):
+        for row in ws.iter_rows(min_row=2, max_col=20, values_only=True):
             if all(v is None for v in row):
                 continue
             record = {"month": sheet_name}
@@ -3407,17 +3430,29 @@ def _load_onboarding():
     wb.close()
     return rows
 
-def _get_onboarding_data():
-    """Return cached onboarding data, reloading if stale (>60 min)."""
-    with _ONBOARDING_LOCK:
-        now = _time.time()
-        if (_ONBOARDING_CACHE["data"] is None or
-                _ONBOARDING_CACHE["loaded_at"] is None or
-                now - _ONBOARDING_CACHE["loaded_at"] > 3600):
-            _ONBOARDING_CACHE["data"] = _load_onboarding()
-            _ONBOARDING_CACHE["loaded_at"] = now
-            logger.info("Onboarding data loaded: %d rows", len(_ONBOARDING_CACHE["data"]))
-        return _ONBOARDING_CACHE["data"]
+def _save_onboarding_to_db(rows):
+    """Clear and re-insert all onboarding rows into the database."""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM onboarding")
+    placeholders = ", ".join(["?"] * len(_ONBOARDING_FIELDS))
+    cols = ", ".join(_ONBOARDING_FIELDS)
+    sql = f"INSERT INTO onboarding ({cols}) VALUES ({placeholders})"
+
+    if hasattr(conn, 'batch_execute'):
+        # Turso: batch insert
+        stmts = []
+        for r in rows:
+            params = tuple(r.get(f, "") for f in _ONBOARDING_FIELDS)
+            stmts.append((sql, params))
+        conn.batch_execute(stmts)
+    else:
+        for r in rows:
+            params = tuple(r.get(f, "") for f in _ONBOARDING_FIELDS)
+            cursor.execute(sql, params)
+    conn.commit()
+    conn.close()
+    logger.info("Onboarding data saved: %d rows", len(rows))
 
 @app.route('/onboarding')
 @login_required
@@ -3428,27 +3463,41 @@ def serve_onboarding():
 @app.route('/api/onboarding')
 @login_required
 def api_onboarding():
-    """Return onboarding data as JSON."""
+    """Return onboarding data from database as JSON."""
     try:
-        data = _get_onboarding_data()
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM onboarding ORDER BY id")
+        rows = cursor.fetchall()
+        conn.close()
+        data = [dict(r) for r in rows]
         return jsonify({"success": True, "rows": data, "count": len(data)})
     except Exception as e:
         logger.error("Onboarding load error: %s", e)
         return jsonify({"success": False, "error": "Failed to load onboarding data."}), 500
 
-@app.route('/api/onboarding/reload', methods=['POST'])
+@app.route('/api/onboarding/upload', methods=['POST'])
 @csrf.exempt
 @login_required
-def api_onboarding_reload():
-    """Force reload onboarding data from Excel file."""
+def api_onboarding_upload():
+    """Upload Excel file, parse it, and store rows in database."""
     try:
-        with _ONBOARDING_LOCK:
-            _ONBOARDING_CACHE["data"] = _load_onboarding()
-            _ONBOARDING_CACHE["loaded_at"] = _time.time()
-        return jsonify({"success": True, "count": len(_ONBOARDING_CACHE["data"])})
+        if 'file' not in request.files:
+            return jsonify({"success": False, "error": "No file uploaded"}), 400
+        f = request.files['file']
+        if not f.filename or not f.filename.lower().endswith('.xlsx'):
+            return jsonify({"success": False, "error": "Please upload an .xlsx file"}), 400
+        file_bytes = f.read()
+        if len(file_bytes) > 10 * 1024 * 1024:
+            return jsonify({"success": False, "error": "File too large (max 10MB)"}), 400
+        rows = _parse_onboarding_excel(file_bytes)
+        if not rows:
+            return jsonify({"success": False, "error": "No data rows found in the Excel file"}), 400
+        _save_onboarding_to_db(rows)
+        return jsonify({"success": True, "count": len(rows)})
     except Exception as e:
-        logger.error("Onboarding reload error: %s", e)
-        return jsonify({"success": False, "error": "Failed to reload onboarding data."}), 500
+        logger.error("Onboarding upload error: %s", e)
+        return jsonify({"success": False, "error": "Failed to process Excel file."}), 500
 
 # ============================================================================
 # INITIALIZE DATABASE ON IMPORT (needed for gunicorn)
