@@ -1542,7 +1542,8 @@ def init_database():
             induction_docs_sent TEXT,
             timegate_info TEXT,
             contract TEXT,
-            wtd TEXT
+            wtd TEXT,
+            UNIQUE(name, month)
         )
     """)
 
@@ -1559,6 +1560,12 @@ def init_database():
         pass
     try:
         cursor.execute("ALTER TABLE users ADD COLUMN login_count INTEGER DEFAULT 0")
+    except Exception:
+        pass
+
+    # Migrate: add unique index on onboarding(name, month) if missing
+    try:
+        cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_onboarding_name_month ON onboarding(name, month)")
     except Exception:
         pass
 
@@ -3431,16 +3438,14 @@ def _parse_onboarding_excel(file_bytes):
     return rows
 
 def _save_onboarding_to_db(rows):
-    """Clear and re-insert all onboarding rows into the database."""
+    """Upsert onboarding rows — update existing (by name+month), insert new."""
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM onboarding")
     placeholders = ", ".join(["?"] * len(_ONBOARDING_FIELDS))
     cols = ", ".join(_ONBOARDING_FIELDS)
-    sql = f"INSERT INTO onboarding ({cols}) VALUES ({placeholders})"
+    sql = f"INSERT OR REPLACE INTO onboarding ({cols}) VALUES ({placeholders})"
 
     if hasattr(conn, 'batch_execute'):
-        # Turso: batch insert
         stmts = []
         for r in rows:
             params = tuple(r.get(f, "") for f in _ONBOARDING_FIELDS)
@@ -3452,7 +3457,7 @@ def _save_onboarding_to_db(rows):
             cursor.execute(sql, params)
     conn.commit()
     conn.close()
-    logger.info("Onboarding data saved: %d rows", len(rows))
+    logger.info("Onboarding data upserted: %d rows", len(rows))
 
 @app.route('/onboarding')
 @login_required
