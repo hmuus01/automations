@@ -279,6 +279,11 @@
                 <option value="Y">Yes</option>
                 <option value="N">No</option>
             </select>
+            <select id="filter-watchlist">
+                <option value="">Watchlist</option>
+                <option value="on">On Watchlist</option>
+                <option value="off">Not on Watchlist</option>
+            </select>
             <input type="text" id="filter-search" placeholder="Search name or Pin TG...">
             <button class="btn-clear" onclick="clearAllFilters()">Clear All</button>
         </div>
@@ -290,8 +295,9 @@
                 <div class="stat-value" id="stat-total">-</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">New Starters This Month</div>
+                <div class="stat-label">Starters This Month</div>
                 <div class="stat-value" id="stat-new-starters">-</div>
+                <div class="stat-sub" id="stat-new-starters-month"></div>
             </div>
             <div class="stat-card">
                 <div class="stat-label">Relief Count</div>
@@ -308,7 +314,7 @@
                 <div class="stat-value" id="stat-avg-hours">-</div>
                 <div class="stat-sub">per week</div>
             </div>
-            <div class="stat-card orange">
+            <div class="stat-card orange" style="cursor:pointer" onclick="filterByWatchlist()">
                 <div class="stat-label">On Watchlist</div>
                 <div class="stat-value" id="stat-watchlist">-</div>
             </div>
@@ -456,6 +462,7 @@
         const manager = document.getElementById('filter-manager').value;
         const rp = document.getElementById('filter-relief-perm').value;
         const visa = document.getElementById('filter-visa').value;
+        const watchlist = document.getElementById('filter-watchlist').value;
         const search = document.getElementById('filter-search').value.toLowerCase().trim();
 
         return allData.filter(r => {
@@ -469,6 +476,8 @@
                 if (visa === 'Y' && v !== 'Y') return false;
                 if (visa === 'N' && v !== 'N') return false;
             }
+            if (watchlist === 'on' && !(r.add_to_watchlist && r.add_to_watchlist.trim())) return false;
+            if (watchlist === 'off' && (r.add_to_watchlist && r.add_to_watchlist.trim())) return false;
             if (search && !(r.name || '').toLowerCase().includes(search) && !(r.pin_tg || '').toLowerCase().includes(search)) return false;
             return true;
         });
@@ -488,17 +497,25 @@
         document.getElementById('filter-manager').value = '';
         document.getElementById('filter-relief-perm').value = '';
         document.getElementById('filter-visa').value = '';
+        document.getElementById('filter-watchlist').value = '';
         document.getElementById('filter-search').value = '';
         applyFilters();
     }
 
+    function filterByWatchlist() {
+        document.getElementById('filter-watchlist').value = 'on';
+        applyFilters();
+    }
+
     // Attach filter listeners
-    ['filter-month','filter-role','filter-client','filter-manager','filter-relief-perm','filter-visa'].forEach(id => {
+    ['filter-month','filter-role','filter-client','filter-manager','filter-relief-perm','filter-visa','filter-watchlist'].forEach(id => {
         document.getElementById(id).addEventListener('change', applyFilters);
     });
     document.getElementById('filter-search').addEventListener('input', applyFilters);
 
     // ---------- STATS ----------
+    const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
     function updateStats(data) {
         const total = data.length;
         document.getElementById('stat-total').textContent = total;
@@ -512,8 +529,10 @@
             const d = parseDate(r.actual_start_date);
             if (!d) return false;
             return d.getMonth() === curMonth && d.getFullYear() === curYear;
-        }).length;
-        document.getElementById('stat-new-starters').textContent = newStarters;
+        });
+        console.log(`Starters this month (${MONTH_NAMES[curMonth]} ${curYear}): ${newStarters.length}`, newStarters.map(r => ({name: r.name, date: r.actual_start_date})));
+        document.getElementById('stat-new-starters').textContent = newStarters.length;
+        document.getElementById('stat-new-starters-month').textContent = MONTH_NAMES[curMonth] + ' ' + curYear;
 
         // Relief / Perm
         const relief = data.filter(r => (r.relief_perm || '').toLowerCase() === 'relief').length;
@@ -536,27 +555,22 @@
     // ---------- DATE PARSING ----------
     function parseDate(s) {
         if (!s) return null;
-        // Try YYYY-MM-DD first
-        if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
-            const d = new Date(s);
+        // Try YYYY-MM-DD — construct locally to avoid UTC shift
+        const iso = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+        if (iso) {
+            const d = new Date(parseInt(iso[1]), parseInt(iso[2]) - 1, parseInt(iso[3]));
             if (!isNaN(d.getTime())) return d;
         }
         // Try DD/MM/YYYY
-        const parts = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-        if (parts) {
-            const d = new Date(parseInt(parts[3]), parseInt(parts[2]) - 1, parseInt(parts[1]));
+        const dmy = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+        if (dmy) {
+            const d = new Date(parseInt(dmy[3]), parseInt(dmy[2]) - 1, parseInt(dmy[1]));
             if (!isNaN(d.getTime())) return d;
         }
         return null;
     }
 
     // ---------- CHARTS ----------
-    const CHART_COLORS = [
-        '#00A651','#4DBD74','#E31837','#F7941D','#2C3E50','#3498DB',
-        '#9B59B6','#1ABC9C','#E67E22','#34495E','#E74C3C','#16A085',
-        '#8E44AD','#2980B9','#D35400','#27AE60','#C0392B','#7F8C8D'
-    ];
-
     function countByField(data, field) {
         const map = {};
         data.forEach(r => {
@@ -570,9 +584,9 @@
         if (charts[key]) { charts[key].destroy(); charts[key] = null; }
     }
 
-    function makeHorizontalBar(canvasId, data, field, key) {
+    function makeSingleColorBar(canvasId, data, field, key, color, limit) {
         destroyChart(key);
-        const entries = countByField(data, field);
+        const entries = countByField(data, field).slice(0, limit || 15);
         const labels = entries.map(e => e[0]);
         const values = entries.map(e => e[1]);
         charts[key] = new Chart(document.getElementById(canvasId), {
@@ -581,7 +595,7 @@
                 labels,
                 datasets: [{
                     data: values,
-                    backgroundColor: labels.map((_, i) => CHART_COLORS[i % CHART_COLORS.length]),
+                    backgroundColor: color,
                     borderRadius: 4,
                     barThickness: 20,
                 }]
@@ -590,21 +604,43 @@
                 indexAxis: 'y',
                 responsive: true,
                 maintainAspectRatio: false,
-                plugins: { legend: { display: false } },
+                plugins: {
+                    legend: { display: false },
+                    datalabels: false,
+                },
                 scales: {
-                    x: { beginAtZero: true, ticks: { precision: 0 } },
+                    x: { beginAtZero: true, ticks: { precision: 0 }, grid: { display: false } },
                     y: { ticks: { font: { size: 11 } } }
                 }
-            }
+            },
+            plugins: [{
+                id: 'barValueLabels',
+                afterDatasetsDraw(chart) {
+                    const ctx = chart.ctx;
+                    chart.data.datasets.forEach((ds, i) => {
+                        const meta = chart.getDatasetMeta(i);
+                        meta.data.forEach((bar, idx) => {
+                            const val = ds.data[idx];
+                            ctx.save();
+                            ctx.fillStyle = '#333';
+                            ctx.font = '600 11px DM Sans, sans-serif';
+                            ctx.textAlign = 'left';
+                            ctx.textBaseline = 'middle';
+                            ctx.fillText(val, bar.x + 6, bar.y);
+                            ctx.restore();
+                        });
+                    });
+                }
+            }]
         });
     }
 
     function updateCharts(data) {
-        // Headcount by Role
-        makeHorizontalBar('chart-role', data, 'role', 'role');
+        // Headcount by Role — green, top 15
+        makeSingleColorBar('chart-role', data, 'role', 'role', '#2E8B2E', 15);
 
-        // Headcount by Client/Location
-        makeHorizontalBar('chart-client', data, 'client_location', 'client');
+        // Headcount by Client/Location — blue, top 15
+        makeSingleColorBar('chart-client', data, 'client_location', 'client', '#4f6ef7', 15);
 
         // Relief vs Perm (donut)
         destroyChart('reliefPerm');
@@ -669,8 +705,8 @@
             }
         });
 
-        // Headcount by Line Manager
-        makeHorizontalBar('chart-manager', data, 'line_manager', 'manager');
+        // Headcount by Line Manager — green, top 15
+        makeSingleColorBar('chart-manager', data, 'line_manager', 'manager', '#2E8B2E', 15);
 
         // Student Visa breakdown (pie)
         destroyChart('visa');
