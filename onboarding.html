@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Onboarding Tracker | FRG Dashboard</title>
+
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <style>
+        :root {
+            --frg-red: #E31837;
+            --frg-orange: #F7941D;
+            --frg-green: #00A651;
+            --frg-green-light: #4DBD74;
+            --bg-dark: #f5f5f7;
+            --bg-card: #ffffff;
+            --bg-card-hover: #fafafa;
+            --border: #e0e0e0;
+            --text-primary: #1a1a1a;
+            --text-secondary: #666666;
+            --text-muted: #999999;
+            --accent-sent: var(--frg-green);
+            --gradient-1: linear-gradient(135deg, var(--frg-green) 0%, var(--frg-green-light) 100%);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'DM Sans', -apple-system, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        .bg-pattern {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            z-index: -1; opacity: 0.6;
+            background-image:
+                radial-gradient(circle at 20% 80%, rgba(227, 24, 55, 0.03) 0%, transparent 50%),
+                radial-gradient(circle at 80% 20%, rgba(0, 166, 81, 0.03) 0%, transparent 50%),
+                radial-gradient(circle at 50% 50%, rgba(247, 148, 29, 0.02) 0%, transparent 70%);
+        }
+
+        .header {
+            padding: 2rem 3rem; display: flex; justify-content: space-between; align-items: center;
+            border-bottom: 1px solid var(--border); backdrop-filter: blur(10px);
+            position: sticky; top: 0; z-index: 100;
+            background: rgba(255, 255, 255, 0.95); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+        }
+        .logo { display: flex; align-items: center; gap: 1rem; }
+        .logo-icon { display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+        .logo-icon img { height: 42px; width: auto; }
+        .logo-text h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; }
+        .logo-text p { font-size: 0.875rem; color: var(--text-secondary); }
+        .header-actions { display: flex; gap: 1rem; align-items: center; }
+
+        .btn {
+            padding: 0.75rem 1.5rem; border-radius: 8px; font-size: 0.875rem;
+            font-weight: 600; cursor: pointer; border: none; transition: all 0.2s; font-family: inherit;
+        }
+        .btn-primary {
+            background: var(--frg-green); color: white;
+            box-shadow: 0 4px 15px rgba(0, 166, 81, 0.3);
+        }
+        .btn-primary:hover { transform: translateY(-2px); background: #00B85C; }
+        .btn-secondary { background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border); }
+        .btn-secondary:hover { background: var(--bg-card-hover); }
+
+        .nav-bar {
+            display: flex; gap: 0; background: var(--bg-card);
+            border-bottom: 1px solid var(--border); padding: 0 3rem;
+        }
+        .nav-link {
+            padding: 0.75rem 1.5rem; font-size: 0.875rem; font-weight: 600;
+            color: var(--text-secondary); text-decoration: none;
+            border-bottom: 2px solid transparent; transition: all 0.2s;
+        }
+        .nav-link:hover { color: var(--text-primary); background: var(--bg-card-hover); }
+        .nav-link.active { color: var(--frg-green); border-bottom-color: var(--frg-green); }
+
+        .main { padding: 2rem 3rem; max-width: 1600px; margin: 0 auto; }
+
+        /* Filter Bar */
+        .filter-bar {
+            background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px;
+            padding: 1.25rem 1.5rem; margin-bottom: 1.5rem;
+            display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+        }
+        .filter-bar label {
+            font-size: 0.75rem; font-weight: 600; color: var(--text-secondary);
+            text-transform: uppercase; letter-spacing: 0.05em;
+        }
+        .filter-bar select, .filter-bar input[type="text"] {
+            padding: 0.5rem 0.75rem; border: 1px solid var(--border); border-radius: 8px;
+            background: var(--bg-card); color: var(--text-primary);
+            font-size: 0.8125rem; font-family: inherit; min-width: 120px;
+        }
+        .filter-bar select:focus, .filter-bar input[type="text"]:focus {
+            outline: none; border-color: var(--frg-green);
+        }
+        .filter-bar input[type="text"] { min-width: 160px; }
+        .btn-clear {
+            padding: 0.5rem 1rem; border-radius: 8px; font-size: 0.8125rem;
+            font-weight: 600; cursor: pointer; border: 1px solid var(--border);
+            background: transparent; color: var(--text-secondary); font-family: inherit;
+            transition: all 0.2s; margin-left: auto;
+        }
+        .btn-clear:hover { background: var(--bg-card-hover); border-color: var(--frg-red); color: var(--frg-red); }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid; grid-template-columns: repeat(6, 1fr);
+            gap: 1.5rem; margin-bottom: 2rem;
+        }
+        .stat-card {
+            background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px;
+            padding: 1.5rem; position: relative; overflow: hidden;
+            transition: all 0.3s; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+        }
+        .stat-card:hover {
+            transform: translateY(-4px); border-color: rgba(0, 166, 81, 0.3);
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.08);
+        }
+        .stat-card::before {
+            content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+            background: var(--gradient-1);
+        }
+        .stat-label {
+            font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.5rem;
+            text-transform: uppercase; letter-spacing: 0.05em;
+        }
+        .stat-value {
+            font-size: 2rem; font-weight: 700; letter-spacing: -0.02em;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .stat-sub {
+            font-size: 0.8125rem; color: var(--text-secondary); margin-top: 0.25rem;
+        }
+        .stat-card.green .stat-value { color: var(--frg-green); }
+        .stat-card.green::before { background: var(--frg-green); }
+        .stat-card.orange .stat-value { color: var(--frg-orange); }
+        .stat-card.orange::before { background: var(--frg-orange); }
+        .stat-card.red .stat-value { color: var(--frg-red); }
+        .stat-card.red::before { background: var(--frg-red); }
+
+        /* Charts */
+        .charts-grid {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 2rem;
+        }
+        .chart-card {
+            background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px;
+            padding: 1.5rem; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+        }
+        .chart-title {
+            font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;
+        }
+        .chart-container { position: relative; height: 300px; }
+        .chart-container.tall { height: 400px; }
+
+        /* Table */
+        .table-section {
+            background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px;
+            overflow: hidden; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+        }
+        .table-header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 1.5rem; border-bottom: 1px solid var(--border);
+        }
+        .table-title { font-size: 1.125rem; font-weight: 600; }
+        .table-container { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 0.75rem 1rem; text-align: left; }
+        th {
+            font-size: 0.75rem; font-weight: 600; text-transform: uppercase;
+            letter-spacing: 0.05em; color: var(--text-secondary); background: #f8f9fa;
+            cursor: pointer; user-select: none; white-space: nowrap;
+        }
+        th:hover { background: #eef0f2; }
+        th .sort-arrow { margin-left: 4px; font-size: 0.65rem; color: var(--text-muted); }
+        tr { border-bottom: 1px solid var(--border); }
+        tr:last-child { border-bottom: none; }
+        tr:hover td { background: var(--bg-card-hover); }
+        td { font-size: 0.8125rem; }
+        tr.watchlist-row td { background: rgba(247, 148, 29, 0.08); }
+        tr.watchlist-row:hover td { background: rgba(247, 148, 29, 0.15); }
+        tr.screening-missing td { background: rgba(227, 24, 55, 0.06); }
+        tr.screening-missing:hover td { background: rgba(227, 24, 55, 0.12); }
+        .row-count {
+            padding: 1rem 1.5rem; font-size: 0.8125rem; color: var(--text-secondary);
+            border-top: 1px solid var(--border);
+        }
+
+        /* Loading */
+        .loading {
+            display: flex; align-items: center; justify-content: center;
+            height: 200px; color: var(--text-secondary);
+        }
+        .spinner {
+            width: 40px; height: 40px; border: 3px solid var(--border);
+            border-top-color: var(--frg-green); border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Responsive */
+        @media (max-width: 1400px) {
+            .stats-grid { grid-template-columns: repeat(3, 1fr); }
+        }
+        @media (max-width: 1200px) {
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+            .charts-grid { grid-template-columns: 1fr; }
+        }
+        @media (max-width: 768px) {
+            .header { flex-direction: column; gap: 1rem; padding: 1rem; }
+            .main { padding: 1rem; }
+            .nav-bar { padding: 0 1rem; overflow-x: auto; }
+            .stats-grid { grid-template-columns: 1fr; }
+            .filter-bar { flex-direction: column; align-items: stretch; }
+            .btn-clear { margin-left: 0; }
+        }
+    </style>
+</head>
+<body>
+    <div class="bg-pattern"></div>
+
+    <header class="header">
+        <div class="logo">
+            <div class="logo-icon">
+                <img src="/frg-logo.png" alt="First Response Group">
+            </div>
+            <div class="logo-text">
+                <h1>Onboarding Tracker</h1>
+                <p>First Response Group</p>
+            </div>
+        </div>
+        <div class="header-actions">
+            <button class="btn btn-primary" onclick="reloadData()">
+                <span>&#8635;</span> Reload Data
+            </button>
+            <a href="/logout" class="btn btn-secondary" style="text-decoration:none;margin-left:4px;">Logout</a>
+        </div>
+    </header>
+
+    <nav class="nav-bar" id="main-nav">
+        <a href="/" class="nav-link">VPI Jobs</a>
+        <a href="/alarm" class="nav-link">Alarm Activation</a>
+        <a href="/patrol" class="nav-link">Patrol Jobs</a>
+        <a href="/onboarding" class="nav-link active">Onboarding</a>
+    </nav>
+    <script>
+    fetch('/api/me').then(r=>r.json()).then(d=>{if(d.is_admin){const a=document.createElement('a');a.href='/admin/users';a.className='nav-link';a.textContent='Admin Panel';document.getElementById('main-nav').appendChild(a);}});
+    </script>
+
+    <main class="main">
+        <!-- Filter Bar -->
+        <div class="filter-bar">
+            <label>Filters:</label>
+            <select id="filter-month"><option value="">All Months</option></select>
+            <select id="filter-role"><option value="">All Roles</option></select>
+            <select id="filter-client"><option value="">All Clients</option></select>
+            <select id="filter-manager"><option value="">All Managers</option></select>
+            <select id="filter-relief-perm">
+                <option value="">Relief / Perm</option>
+                <option value="Relief">Relief</option>
+                <option value="Perm">Perm</option>
+            </select>
+            <select id="filter-visa">
+                <option value="">Student Visa</option>
+                <option value="Y">Yes</option>
+                <option value="N">No</option>
+            </select>
+            <input type="text" id="filter-search" placeholder="Search name or Pin TG...">
+            <button class="btn-clear" onclick="clearAllFilters()">Clear All</button>
+        </div>
+
+        <!-- Stats -->
+        <div class="stats-grid">
+            <div class="stat-card green">
+                <div class="stat-label">Total Headcount</div>
+                <div class="stat-value" id="stat-total">-</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">New Starters This Month</div>
+                <div class="stat-value" id="stat-new-starters">-</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Relief Count</div>
+                <div class="stat-value" id="stat-relief">-</div>
+                <div class="stat-sub" id="stat-relief-pct"></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Perm Count</div>
+                <div class="stat-value" id="stat-perm">-</div>
+                <div class="stat-sub" id="stat-perm-pct"></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Avg Hours</div>
+                <div class="stat-value" id="stat-avg-hours">-</div>
+                <div class="stat-sub">per week</div>
+            </div>
+            <div class="stat-card orange">
+                <div class="stat-label">On Watchlist</div>
+                <div class="stat-value" id="stat-watchlist">-</div>
+            </div>
+        </div>
+
+        <!-- Charts -->
+        <div class="charts-grid">
+            <div class="chart-card">
+                <div class="chart-title">Headcount by Role</div>
+                <div class="chart-container tall"><canvas id="chart-role"></canvas></div>
+            </div>
+            <div class="chart-card">
+                <div class="chart-title">Headcount by Client / Location</div>
+                <div class="chart-container tall"><canvas id="chart-client"></canvas></div>
+            </div>
+            <div class="chart-card">
+                <div class="chart-title">Relief vs Perm</div>
+                <div class="chart-container"><canvas id="chart-relief-perm"></canvas></div>
+            </div>
+            <div class="chart-card">
+                <div class="chart-title">New Starters per Month</div>
+                <div class="chart-container"><canvas id="chart-monthly"></canvas></div>
+            </div>
+            <div class="chart-card">
+                <div class="chart-title">Headcount by Line Manager</div>
+                <div class="chart-container tall"><canvas id="chart-manager"></canvas></div>
+            </div>
+            <div class="chart-card">
+                <div class="chart-title">Student Visa Breakdown</div>
+                <div class="chart-container"><canvas id="chart-visa"></canvas></div>
+            </div>
+        </div>
+
+        <!-- Data Table -->
+        <div class="table-section">
+            <div class="table-header">
+                <div class="table-title">Onboarding Records</div>
+            </div>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th data-col="name">Name <span class="sort-arrow"></span></th>
+                            <th data-col="pin_tg">Pin TG <span class="sort-arrow"></span></th>
+                            <th data-col="role">Role <span class="sort-arrow"></span></th>
+                            <th data-col="client_location">Client / Location <span class="sort-arrow"></span></th>
+                            <th data-col="line_manager">Line Manager <span class="sort-arrow"></span></th>
+                            <th data-col="actual_start_date">Start Date <span class="sort-arrow"></span></th>
+                            <th data-col="rate">Rate <span class="sort-arrow"></span></th>
+                            <th data-col="hours">Hours <span class="sort-arrow"></span></th>
+                            <th data-col="relief_perm">Relief / Perm <span class="sort-arrow"></span></th>
+                            <th data-col="month">Month <span class="sort-arrow"></span></th>
+                        </tr>
+                    </thead>
+                    <tbody id="table-body">
+                        <tr><td colspan="10" class="loading"><div class="spinner"></div></td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="row-count" id="row-count">Loading...</div>
+        </div>
+    </main>
+
+    <script>
+    let allData = [];
+    let sortCol = null;
+    let sortAsc = true;
+    let charts = {};
+
+    const MONTH_ORDER = ['Jan','Feb','March','April','May','June','July','August','September','October','November','December'];
+
+    // ---------- LOAD DATA ----------
+    async function loadData() {
+        try {
+            const resp = await fetch('/api/onboarding');
+            const json = await resp.json();
+            if (!json.success) throw new Error(json.error || 'Failed to load');
+            allData = json.rows;
+            populateFilterOptions();
+            applyFilters();
+        } catch (e) {
+            document.getElementById('table-body').innerHTML =
+                '<tr><td colspan="10" style="text-align:center;padding:2rem;color:var(--frg-red);">Error loading data: ' + e.message + '</td></tr>';
+            document.getElementById('row-count').textContent = 'Error';
+        }
+    }
+
+    async function reloadData() {
+        try {
+            await fetch('/api/onboarding/reload', { method: 'POST' });
+            location.reload();
+        } catch (e) {
+            alert('Reload failed: ' + e.message);
+        }
+    }
+
+    // ---------- FILTERS ----------
+    function populateFilterOptions() {
+        populateSelect('filter-month', unique('month'), MONTH_ORDER);
+        populateSelect('filter-role', unique('role'));
+        populateSelect('filter-client', unique('client_location'));
+        populateSelect('filter-manager', unique('line_manager'));
+    }
+
+    function unique(key) {
+        const vals = new Set();
+        allData.forEach(r => { if (r[key]) vals.add(r[key]); });
+        return Array.from(vals);
+    }
+
+    function populateSelect(id, values, order) {
+        const el = document.getElementById(id);
+        const firstOpt = el.options[0].textContent;
+        const sorted = order
+            ? values.sort((a, b) => {
+                const ai = order.indexOf(a), bi = order.indexOf(b);
+                return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+              })
+            : values.sort((a, b) => a.localeCompare(b));
+        el.innerHTML = '<option value="">' + firstOpt + '</option>';
+        sorted.forEach(v => {
+            const opt = document.createElement('option');
+            opt.value = v; opt.textContent = v;
+            el.appendChild(opt);
+        });
+    }
+
+    function getFiltered() {
+        const month = document.getElementById('filter-month').value;
+        const role = document.getElementById('filter-role').value;
+        const client = document.getElementById('filter-client').value;
+        const manager = document.getElementById('filter-manager').value;
+        const rp = document.getElementById('filter-relief-perm').value;
+        const visa = document.getElementById('filter-visa').value;
+        const search = document.getElementById('filter-search').value.toLowerCase().trim();
+
+        return allData.filter(r => {
+            if (month && r.month !== month) return false;
+            if (role && r.role !== role) return false;
+            if (client && r.client_location !== client) return false;
+            if (manager && r.line_manager !== manager) return false;
+            if (rp && (r.relief_perm || '').toLowerCase() !== rp.toLowerCase()) return false;
+            if (visa) {
+                const v = (r.student_on_visa || '').toUpperCase().trim();
+                if (visa === 'Y' && v !== 'Y') return false;
+                if (visa === 'N' && v !== 'N') return false;
+            }
+            if (search && !(r.name || '').toLowerCase().includes(search) && !(r.pin_tg || '').toLowerCase().includes(search)) return false;
+            return true;
+        });
+    }
+
+    function applyFilters() {
+        const filtered = getFiltered();
+        updateStats(filtered);
+        updateCharts(filtered);
+        updateTable(filtered);
+    }
+
+    function clearAllFilters() {
+        document.getElementById('filter-month').value = '';
+        document.getElementById('filter-role').value = '';
+        document.getElementById('filter-client').value = '';
+        document.getElementById('filter-manager').value = '';
+        document.getElementById('filter-relief-perm').value = '';
+        document.getElementById('filter-visa').value = '';
+        document.getElementById('filter-search').value = '';
+        applyFilters();
+    }
+
+    // Attach filter listeners
+    ['filter-month','filter-role','filter-client','filter-manager','filter-relief-perm','filter-visa'].forEach(id => {
+        document.getElementById(id).addEventListener('change', applyFilters);
+    });
+    document.getElementById('filter-search').addEventListener('input', applyFilters);
+
+    // ---------- STATS ----------
+    function updateStats(data) {
+        const total = data.length;
+        document.getElementById('stat-total').textContent = total;
+
+        // New starters this month
+        const now = new Date();
+        const curMonth = now.getMonth();
+        const curYear = now.getFullYear();
+        const newStarters = data.filter(r => {
+            if (!r.actual_start_date) return false;
+            const d = parseDate(r.actual_start_date);
+            if (!d) return false;
+            return d.getMonth() === curMonth && d.getFullYear() === curYear;
+        }).length;
+        document.getElementById('stat-new-starters').textContent = newStarters;
+
+        // Relief / Perm
+        const relief = data.filter(r => (r.relief_perm || '').toLowerCase() === 'relief').length;
+        const perm = data.filter(r => (r.relief_perm || '').toLowerCase() === 'perm').length;
+        document.getElementById('stat-relief').textContent = relief;
+        document.getElementById('stat-relief-pct').textContent = total ? (relief / total * 100).toFixed(1) + '% of total' : '';
+        document.getElementById('stat-perm').textContent = perm;
+        document.getElementById('stat-perm-pct').textContent = total ? (perm / total * 100).toFixed(1) + '% of total' : '';
+
+        // Avg hours
+        const hourVals = data.map(r => parseFloat(r.hours)).filter(v => !isNaN(v) && v > 0);
+        const avgHours = hourVals.length ? (hourVals.reduce((a, b) => a + b, 0) / hourVals.length).toFixed(1) : '-';
+        document.getElementById('stat-avg-hours').textContent = avgHours;
+
+        // Watchlist
+        const watchlist = data.filter(r => r.add_to_watchlist && r.add_to_watchlist.trim() !== '').length;
+        document.getElementById('stat-watchlist').textContent = watchlist;
+    }
+
+    // ---------- DATE PARSING ----------
+    function parseDate(s) {
+        if (!s) return null;
+        // Try YYYY-MM-DD first
+        if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
+            const d = new Date(s);
+            if (!isNaN(d.getTime())) return d;
+        }
+        // Try DD/MM/YYYY
+        const parts = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+        if (parts) {
+            const d = new Date(parseInt(parts[3]), parseInt(parts[2]) - 1, parseInt(parts[1]));
+            if (!isNaN(d.getTime())) return d;
+        }
+        return null;
+    }
+
+    // ---------- CHARTS ----------
+    const CHART_COLORS = [
+        '#00A651','#4DBD74','#E31837','#F7941D','#2C3E50','#3498DB',
+        '#9B59B6','#1ABC9C','#E67E22','#34495E','#E74C3C','#16A085',
+        '#8E44AD','#2980B9','#D35400','#27AE60','#C0392B','#7F8C8D'
+    ];
+
+    function countByField(data, field) {
+        const map = {};
+        data.forEach(r => {
+            const val = r[field] || '(blank)';
+            map[val] = (map[val] || 0) + 1;
+        });
+        return Object.entries(map).sort((a, b) => b[1] - a[1]);
+    }
+
+    function destroyChart(key) {
+        if (charts[key]) { charts[key].destroy(); charts[key] = null; }
+    }
+
+    function makeHorizontalBar(canvasId, data, field, key) {
+        destroyChart(key);
+        const entries = countByField(data, field);
+        const labels = entries.map(e => e[0]);
+        const values = entries.map(e => e[1]);
+        charts[key] = new Chart(document.getElementById(canvasId), {
+            type: 'bar',
+            data: {
+                labels,
+                datasets: [{
+                    data: values,
+                    backgroundColor: labels.map((_, i) => CHART_COLORS[i % CHART_COLORS.length]),
+                    borderRadius: 4,
+                    barThickness: 20,
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { beginAtZero: true, ticks: { precision: 0 } },
+                    y: { ticks: { font: { size: 11 } } }
+                }
+            }
+        });
+    }
+
+    function updateCharts(data) {
+        // Headcount by Role
+        makeHorizontalBar('chart-role', data, 'role', 'role');
+
+        // Headcount by Client/Location
+        makeHorizontalBar('chart-client', data, 'client_location', 'client');
+
+        // Relief vs Perm (donut)
+        destroyChart('reliefPerm');
+        const relief = data.filter(r => (r.relief_perm || '').toLowerCase() === 'relief').length;
+        const perm = data.filter(r => (r.relief_perm || '').toLowerCase() === 'perm').length;
+        const other = data.length - relief - perm;
+        const rpLabels = ['Relief', 'Perm'];
+        const rpValues = [relief, perm];
+        if (other > 0) { rpLabels.push('Other'); rpValues.push(other); }
+        charts.reliefPerm = new Chart(document.getElementById('chart-relief-perm'), {
+            type: 'doughnut',
+            data: {
+                labels: rpLabels,
+                datasets: [{
+                    data: rpValues,
+                    backgroundColor: ['#00A651', '#F7941D', '#999999'],
+                    borderWidth: 0
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'bottom', labels: { padding: 16, font: { size: 12 } } }
+                }
+            }
+        });
+
+        // New Starters per Month (line)
+        destroyChart('monthly');
+        const monthCounts = {};
+        MONTH_ORDER.forEach(m => monthCounts[m] = 0);
+        data.forEach(r => {
+            if (!r.actual_start_date) return;
+            const d = parseDate(r.actual_start_date);
+            if (!d) return;
+            const mIdx = d.getMonth();
+            if (mIdx >= 0 && mIdx < 12) monthCounts[MONTH_ORDER[mIdx]]++;
+        });
+        charts.monthly = new Chart(document.getElementById('chart-monthly'), {
+            type: 'line',
+            data: {
+                labels: MONTH_ORDER,
+                datasets: [{
+                    label: 'New Starters',
+                    data: MONTH_ORDER.map(m => monthCounts[m]),
+                    borderColor: '#00A651',
+                    backgroundColor: 'rgba(0, 166, 81, 0.1)',
+                    fill: true,
+                    tension: 0.3,
+                    pointRadius: 4,
+                    pointBackgroundColor: '#00A651'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    y: { beginAtZero: true, ticks: { precision: 0 } }
+                }
+            }
+        });
+
+        // Headcount by Line Manager
+        makeHorizontalBar('chart-manager', data, 'line_manager', 'manager');
+
+        // Student Visa breakdown (pie)
+        destroyChart('visa');
+        const visaY = data.filter(r => (r.student_on_visa || '').toUpperCase().trim() === 'Y').length;
+        const visaN = data.filter(r => (r.student_on_visa || '').toUpperCase().trim() === 'N').length;
+        const visaBlank = data.length - visaY - visaN;
+        charts.visa = new Chart(document.getElementById('chart-visa'), {
+            type: 'pie',
+            data: {
+                labels: ['Yes', 'No', 'Not specified'],
+                datasets: [{
+                    data: [visaY, visaN, visaBlank],
+                    backgroundColor: ['#E31837', '#00A651', '#cccccc'],
+                    borderWidth: 0
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'bottom', labels: { padding: 16, font: { size: 12 } } }
+                }
+            }
+        });
+    }
+
+    // ---------- TABLE ----------
+    function updateTable(data) {
+        const sorted = sortData(data);
+        const tbody = document.getElementById('table-body');
+        if (sorted.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:2rem;color:var(--text-muted);">No matching records</td></tr>';
+            document.getElementById('row-count').textContent = '0 rows';
+            return;
+        }
+        tbody.innerHTML = sorted.map(r => {
+            const classes = [];
+            if (r.add_to_watchlist && r.add_to_watchlist.trim()) classes.push('watchlist-row');
+            if (!r.screening_completion_date && r.actual_start_date) classes.push('screening-missing');
+            return `<tr class="${classes.join(' ')}">
+                <td>${esc(r.name)}</td>
+                <td>${esc(r.pin_tg)}</td>
+                <td>${esc(r.role)}</td>
+                <td>${esc(r.client_location)}</td>
+                <td>${esc(r.line_manager)}</td>
+                <td>${formatDate(r.actual_start_date)}</td>
+                <td>${esc(r.rate)}</td>
+                <td>${esc(r.hours)}</td>
+                <td>${esc(r.relief_perm)}</td>
+                <td>${esc(r.month)}</td>
+            </tr>`;
+        }).join('');
+        document.getElementById('row-count').textContent = sorted.length + ' row' + (sorted.length !== 1 ? 's' : '');
+    }
+
+    function sortData(data) {
+        if (!sortCol) return data;
+        const arr = [...data];
+        arr.sort((a, b) => {
+            let va = a[sortCol] || '', vb = b[sortCol] || '';
+            if (sortCol === 'actual_start_date') {
+                const da = parseDate(va), db = parseDate(vb);
+                va = da ? da.getTime() : 0;
+                vb = db ? db.getTime() : 0;
+                return sortAsc ? va - vb : vb - va;
+            }
+            const cmp = String(va).localeCompare(String(vb), undefined, { numeric: true });
+            return sortAsc ? cmp : -cmp;
+        });
+        return arr;
+    }
+
+    // Column sort
+    document.querySelectorAll('th[data-col]').forEach(th => {
+        th.addEventListener('click', () => {
+            const col = th.dataset.col;
+            if (sortCol === col) { sortAsc = !sortAsc; }
+            else { sortCol = col; sortAsc = true; }
+            document.querySelectorAll('th[data-col] .sort-arrow').forEach(s => s.textContent = '');
+            th.querySelector('.sort-arrow').textContent = sortAsc ? ' \u25B2' : ' \u25BC';
+            applyFilters();
+        });
+    });
+
+    function esc(s) {
+        if (!s) return '';
+        const el = document.createElement('span');
+        el.textContent = s;
+        return el.innerHTML;
+    }
+
+    function formatDate(s) {
+        if (!s) return '';
+        const d = parseDate(s);
+        if (!d) return esc(s);
+        const day = String(d.getDate()).padStart(2, '0');
+        const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        return day + ' ' + months[d.getMonth()] + ' ' + d.getFullYear();
+    }
+
+    // ---------- INIT ----------
+    loadData();
+    </script>
+</body>
+</html>

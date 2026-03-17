@@ -139,7 +139,7 @@ def add_security_headers(response):
     response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
     response.headers['Content-Security-Policy'] = (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline'; "
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
         "font-src 'self' https://fonts.gstatic.com; "
         "img-src 'self' data:; "
@@ -743,6 +743,7 @@ ADMIN_PAGE = """
         <a href="/" class="nav-link">VPI Jobs</a>
         <a href="/alarm" class="nav-link">Alarm Activation</a>
         <a href="/patrol" class="nav-link">Patrol Jobs</a>
+        <a href="/onboarding" class="nav-link">Onboarding</a>
         <a href="/admin/users" class="nav-link active">Admin Panel</a>
     </nav>
 
@@ -3357,6 +3358,97 @@ def patrol_get_config():
         "new_flags": CONFIG["PATROL_NEW_FLAGS"],
         "has_credentials": all([CONFIG["USERNAME"], CONFIG["PASSWORD"], CONFIG["COMPANY_KEY"]])
     })
+
+# ============================================================================
+# ONBOARDING DASHBOARD
+# ============================================================================
+
+import openpyxl
+import threading
+import time as _time
+
+_ONBOARDING_FILE = os.environ.get("ONBOARDING_FILE", os.path.join(os.path.dirname(os.path.abspath(__file__)), "Onboarding Checklist 2025.xlsx"))
+_ONBOARDING_CACHE = {"data": None, "loaded_at": None}
+_ONBOARDING_LOCK = threading.Lock()
+_ONBOARDING_MONTHS = ["Jan", "Feb", "March", "April", "May", "June",
+                       "July", "August", "September", "October", "November", "December"]
+_ONBOARDING_COL_MAP = {
+    1: "name", 2: "student_on_visa", 3: "pin_tg", 4: "screening_completion_date",
+    5: "actual_start_date", 6: "rate", 7: "role", 8: "line_manager",
+    9: "client_location", 10: "hours", 11: "relief_perm", 12: "nok",
+    13: "add_to_watchlist", 14: "sage", 15: "payroll", 16: "mq",
+    17: "induction_docs_sent", 18: "timegate_info", 19: "contract", 20: "wtd",
+}
+
+def _load_onboarding():
+    """Read the onboarding Excel file and cache the data."""
+    path = _ONBOARDING_FILE
+    if not os.path.isfile(path):
+        logger.warning("Onboarding file not found: %s", path)
+        return []
+
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    rows = []
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2, max_col=20, values_only=True), start=2):
+            if all(v is None for v in row):
+                continue
+            record = {"month": sheet_name}
+            for col_num, key in _ONBOARDING_COL_MAP.items():
+                val = row[col_num - 1] if col_num - 1 < len(row) else None
+                if val is None:
+                    record[key] = ""
+                elif isinstance(val, datetime):
+                    record[key] = val.strftime("%Y-%m-%d")
+                else:
+                    record[key] = str(val).strip()
+            rows.append(record)
+    wb.close()
+    return rows
+
+def _get_onboarding_data():
+    """Return cached onboarding data, reloading if stale (>60 min)."""
+    with _ONBOARDING_LOCK:
+        now = _time.time()
+        if (_ONBOARDING_CACHE["data"] is None or
+                _ONBOARDING_CACHE["loaded_at"] is None or
+                now - _ONBOARDING_CACHE["loaded_at"] > 3600):
+            _ONBOARDING_CACHE["data"] = _load_onboarding()
+            _ONBOARDING_CACHE["loaded_at"] = now
+            logger.info("Onboarding data loaded: %d rows", len(_ONBOARDING_CACHE["data"]))
+        return _ONBOARDING_CACHE["data"]
+
+@app.route('/onboarding')
+@login_required
+def serve_onboarding():
+    """Serve the onboarding dashboard."""
+    return send_from_directory('.', 'onboarding.html')
+
+@app.route('/api/onboarding')
+@login_required
+def api_onboarding():
+    """Return onboarding data as JSON."""
+    try:
+        data = _get_onboarding_data()
+        return jsonify({"success": True, "rows": data, "count": len(data)})
+    except Exception as e:
+        logger.error("Onboarding load error: %s", e)
+        return jsonify({"success": False, "error": "Failed to load onboarding data."}), 500
+
+@app.route('/api/onboarding/reload', methods=['POST'])
+@csrf.exempt
+@login_required
+def api_onboarding_reload():
+    """Force reload onboarding data from Excel file."""
+    try:
+        with _ONBOARDING_LOCK:
+            _ONBOARDING_CACHE["data"] = _load_onboarding()
+            _ONBOARDING_CACHE["loaded_at"] = _time.time()
+        return jsonify({"success": True, "count": len(_ONBOARDING_CACHE["data"])})
+    except Exception as e:
+        logger.error("Onboarding reload error: %s", e)
+        return jsonify({"success": False, "error": "Failed to reload onboarding data."}), 500
 
 # ============================================================================
 # INITIALIZE DATABASE ON IMPORT (needed for gunicorn)
