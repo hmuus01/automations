@@ -1664,55 +1664,104 @@
             document.getElementById('sync-modal').classList.remove('active');
         }
         
+        let syncPollTimer = null;
+
         async function runSync() {
             const startDate = document.getElementById('sync-start').value;
             const endDate = document.getElementById('sync-end').value;
             const resultEl = document.getElementById('sync-result');
             const btn = document.getElementById('sync-btn');
-            
+
             btn.disabled = true;
-            btn.textContent = 'Syncing...';
+            btn.textContent = 'Starting...';
             resultEl.style.display = 'none';
-            
+
             try {
                 const res = await fetch('/api/sync', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ start: startDate, end: endDate })
                 });
-                
+
                 const data = await res.json();
-                
-                if (data.success) {
-                    resultEl.className = 'alert success';
-                    resultEl.innerHTML = `
-                        <span>✓</span>
-                        <span>Synced ${data.jobs_fetched} jobs (${data.inserted} new, ${data.updated} updated)</span>
-                    `;
-                    
-                    // Reload dashboard
-                    loadDashboard();
+
+                if (res.status === 409) {
+                    resultEl.className = 'alert warning';
+                    resultEl.innerHTML = '<span>&#9888;&#65039;</span><span>A sync is already running.</span>';
+                    resultEl.style.display = 'flex';
+                    btn.disabled = false;
+                    btn.textContent = 'Start Sync';
+                    return;
+                }
+
+                if (res.status === 202) {
+                    closeSyncModal();
+                    showSyncToast('Sync in progress\u2026');
+                    startSyncPolling();
                 } else {
                     resultEl.className = 'alert warning';
-                    resultEl.innerHTML = `
-                        <span>⚠️</span>
-                        <span>${data.error || 'Sync failed'}</span>
-                    `;
+                    resultEl.innerHTML = `<span>&#9888;&#65039;</span><span>${data.error || 'Sync failed'}</span>`;
+                    resultEl.style.display = 'flex';
+                    btn.disabled = false;
+                    btn.textContent = 'Start Sync';
                 }
-                
-                resultEl.style.display = 'flex';
-                
+
             } catch (err) {
                 resultEl.className = 'alert warning';
-                resultEl.innerHTML = `
-                    <span>⚠️</span>
-                    <span>Error: ${err.message}</span>
-                `;
+                resultEl.innerHTML = `<span>&#9888;&#65039;</span><span>Error: ${err.message}</span>`;
                 resultEl.style.display = 'flex';
+                btn.disabled = false;
+                btn.textContent = 'Start Sync';
             }
-            
-            btn.disabled = false;
-            btn.textContent = 'Start Sync';
+        }
+
+        function startSyncPolling() {
+            if (syncPollTimer) clearInterval(syncPollTimer);
+            syncPollTimer = setInterval(async () => {
+                try {
+                    const res = await fetch('/api/sync/status');
+                    const status = await res.json();
+                    if (!status.running) {
+                        clearInterval(syncPollTimer);
+                        syncPollTimer = null;
+                        if (status.last_result) {
+                            const r = status.last_result;
+                            showSyncToast(`Sync complete: ${r.jobs_fetched} jobs (${r.inserted} new, ${r.updated} updated)`, 'success');
+                            loadDashboard();
+                        } else if (status.last_error) {
+                            showSyncToast(status.last_error, 'error');
+                        }
+                        // Re-enable sync button
+                        const btn = document.getElementById('sync-btn');
+                        btn.disabled = false;
+                        btn.textContent = 'Start Sync';
+                    }
+                } catch (e) {
+                    // Keep polling on network errors
+                }
+            }, 2000);
+        }
+
+        function showSyncToast(message, type) {
+            let toast = document.getElementById('sync-toast');
+            if (!toast) {
+                toast = document.createElement('div');
+                toast.id = 'sync-toast';
+                toast.style.cssText = 'position:fixed;top:20px;right:20px;padding:14px 22px;border-radius:8px;color:#fff;font-weight:500;z-index:10000;transition:opacity 0.3s;box-shadow:0 4px 12px rgba(0,0,0,0.15);';
+                document.body.appendChild(toast);
+            }
+            toast.style.opacity = '1';
+            if (type === 'success') {
+                toast.style.background = '#16a34a';
+            } else if (type === 'error') {
+                toast.style.background = '#dc2626';
+            } else {
+                toast.style.background = '#2563eb';
+            }
+            toast.textContent = message;
+            if (type === 'success' || type === 'error') {
+                setTimeout(() => { toast.style.opacity = '0'; }, 5000);
+            }
         }
         
         function exportData() {
