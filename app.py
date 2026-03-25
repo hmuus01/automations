@@ -23,6 +23,7 @@ import sys
 import json
 import sqlite3
 import logging
+import threading
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Tuple
 from functools import wraps
@@ -2618,23 +2619,10 @@ def get_jobs():
     conn.close()
     return jsonify(data)
 
-@app.route('/api/sync', methods=['POST'])
-@csrf.exempt
-@login_required
-@limiter.limit("3 per minute")
-def sync_jobs():
-    """Trigger a sync from BigChange API."""
-    data = request.json or {}
-    start_date = data.get('start', (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d'))
-    end_date = data.get('end', datetime.now().strftime('%Y-%m-%d'))
-    
-    # Check credentials
-    if not all([CONFIG["USERNAME"], CONFIG["PASSWORD"], CONFIG["COMPANY_KEY"]]):
-        return jsonify({
-            "success": False,
-            "error": "Missing BigChange credentials. Set BIGCHANGE_USERNAME, BIGCHANGE_PASSWORD, BIGCHANGE_KEY environment variables."
-        }), 400
-    
+sync_status = {"running": False, "last_result": None, "last_error": None}
+
+def _run_sync(start_date, end_date):
+    """Background sync worker."""
     # Log sync start
     conn = get_db()
     cursor = conn.cursor()
@@ -2645,14 +2633,14 @@ def sync_jobs():
     sync_id = cursor.lastrowid
     conn.commit()
     conn.close()
-    
+
     try:
         client = BigChangeClient(CONFIG)
         jobs = client.get_all_jobs(start_date, end_date)
-        
+
         inserted, updated = upsert_jobs(jobs)
         refresh_summaries()
-        
+
         # Update sync log
         conn = get_db()
         cursor = conn.cursor()
@@ -2662,14 +2650,15 @@ def sync_jobs():
         """, (datetime.utcnow().isoformat(), len(jobs), inserted, updated, "success", sync_id))
         conn.commit()
         conn.close()
-        
-        return jsonify({
+
+        sync_status["last_result"] = {
             "success": True,
             "jobs_fetched": len(jobs),
             "inserted": inserted,
             "updated": updated
-        })
-        
+        }
+        sync_status["last_error"] = None
+
     except Exception as e:
         logger.error(f"Sync failed: {e}")
         conn = get_db()
@@ -2680,9 +2669,48 @@ def sync_jobs():
         )
         conn.commit()
         conn.close()
-        
+
         logger.error("Sync error: %s", e)
-        return jsonify({"success": False, "error": "Sync failed. Check server logs for details."}), 500
+        sync_status["last_result"] = None
+        sync_status["last_error"] = "Sync failed. Check server logs for details."
+
+    finally:
+        sync_status["running"] = False
+
+@app.route('/api/sync', methods=['POST'])
+@csrf.exempt
+@login_required
+@limiter.limit("3 per minute")
+def sync_jobs():
+    """Trigger a sync from BigChange API."""
+    if sync_status["running"]:
+        return jsonify({"status": "already_running"}), 409
+
+    data = request.json or {}
+    start_date = data.get('start', (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d'))
+    end_date = data.get('end', datetime.now().strftime('%Y-%m-%d'))
+
+    # Check credentials
+    if not all([CONFIG["USERNAME"], CONFIG["PASSWORD"], CONFIG["COMPANY_KEY"]]):
+        return jsonify({
+            "success": False,
+            "error": "Missing BigChange credentials. Set BIGCHANGE_USERNAME, BIGCHANGE_PASSWORD, BIGCHANGE_KEY environment variables."
+        }), 400
+
+    sync_status["running"] = True
+    sync_status["last_result"] = None
+    sync_status["last_error"] = None
+
+    thread = threading.Thread(target=_run_sync, args=(start_date, end_date), daemon=True)
+    thread.start()
+
+    return jsonify({"status": "started"}), 202
+
+@app.route('/api/sync/status')
+@login_required
+def sync_jobs_status():
+    """Return current sync status."""
+    return jsonify(sync_status)
 
 @app.route('/api/config')
 @login_required
