@@ -909,7 +909,7 @@
                 <span id="sync-time">Last sync: Never</span>
             </div>
             <button class="btn btn-secondary" onclick="exportData()">Export CSV</button>
-            <button class="btn btn-primary" onclick="openSyncModal()">
+            <button id="sync-btn" class="btn btn-primary" onclick="openSyncModal()" style="display:none">
                 <span>↻</span> Sync Now
             </button>
             <a href="/logout" class="btn btn-secondary" style="text-decoration:none;margin-left:4px;">Logout</a>
@@ -918,12 +918,13 @@
 
     <nav class="nav-bar" id="main-nav">
         <a href="/" class="nav-link">VPI Jobs</a>
+        <a href="/sites" class="nav-link">Sites</a>
         <a href="/alarm" class="nav-link active">Alarm Activation</a>
         <a href="/patrol" class="nav-link">Patrol Jobs</a>
         <a href="/onboarding" class="nav-link">Onboarding</a>
     </nav>
     <script>
-    fetch('/api/me').then(r=>r.json()).then(d=>{if(d.is_admin){const a=document.createElement('a');a.href='/admin/users';a.className='nav-link';a.textContent='Admin Panel';document.getElementById('main-nav').appendChild(a);}});
+    fetch('/api/me').then(r=>r.json()).then(d=>{if(d.is_admin){const a=document.createElement('a');a.href='/admin/users';a.className='nav-link';a.textContent='Admin Panel';document.getElementById('main-nav').appendChild(a);const b=document.getElementById('sync-btn');if(b)b.style.display='';}});
     </script>
 
     <main class="main">

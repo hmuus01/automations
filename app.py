@@ -32,7 +32,7 @@ from requests.auth import HTTPBasicAuth
 
 import re
 from urllib.parse import urlparse
-from flask import Flask, jsonify, request, send_from_directory, render_template_string, redirect, url_for, flash
+from flask import Flask, jsonify, request, send_from_directory, send_file, render_template_string, redirect, url_for, flash
 from flask_cors import CORS
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from flask_wtf.csrf import CSRFProtect
@@ -2677,6 +2677,107 @@ def _run_sync(start_date, end_date):
     finally:
         sync_status["running"] = False
 
+# ----------------------------------------------------------------------------
+# Auto-sync: scheduled background sync for all three services
+# ----------------------------------------------------------------------------
+
+AUTO_SYNC_LOOKBACK_DAYS = 7
+AUTO_SYNC_DEDUPE_WINDOW_MIN = 30  # skip if another auto-sync ran within this window
+
+
+def _recent_auto_sync_running_or_done():
+    """Return True if any auto-sync ran successfully within the dedupe window
+    or is currently running. Lets us guard against multiple gunicorn workers
+    each firing the scheduled job."""
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        cutoff = (datetime.utcnow() - timedelta(minutes=AUTO_SYNC_DEDUPE_WINDOW_MIN)).isoformat()
+        cursor.execute(
+            """
+            SELECT 1 FROM sync_log
+            WHERE (status = 'running' OR run_start >= ?)
+              AND COALESCE(error_message, '') LIKE 'auto:%'
+            LIMIT 1
+            """,
+            [cutoff],
+        )
+        row = cursor.fetchone()
+        conn.close()
+        return bool(row)
+    except Exception as e:
+        logger.warning("Auto-sync dedupe check failed: %s", e)
+        return False
+
+
+def _do_one_sync(label, job_type_id, upsert_fn, refresh_fn):
+    """Run one service's sync end-to-end. Logs to sync_log with an 'auto:' tag
+    in error_message so we can tell auto vs manual runs apart."""
+    start_date = (datetime.now() - timedelta(days=AUTO_SYNC_LOOKBACK_DAYS)).strftime('%Y-%m-%d')
+    end_date = datetime.now().strftime('%Y-%m-%d')
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO sync_log (run_start, date_from, date_to, status, error_message) VALUES (?, ?, ?, ?, ?)",
+        (datetime.utcnow().isoformat(), start_date, end_date, "running", f"auto:{label}"),
+    )
+    sync_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+
+    try:
+        client = BigChangeClient(CONFIG)
+        jobs = client.get_all_jobs(start_date, end_date, job_type_id=job_type_id)
+        inserted, updated = upsert_fn(jobs)
+        refresh_fn()
+
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            """UPDATE sync_log SET run_end = ?, jobs_fetched = ?, jobs_inserted = ?,
+                                   jobs_updated = ?, status = ?
+               WHERE id = ?""",
+            (datetime.utcnow().isoformat(), len(jobs), inserted, updated, "success", sync_id),
+        )
+        conn.commit()
+        conn.close()
+        logger.info(
+            "Auto-sync %s: fetched=%d inserted=%d updated=%d", label, len(jobs), inserted, updated
+        )
+        return True
+    except Exception as e:
+        logger.error("Auto-sync %s failed: %s", label, e)
+        try:
+            conn = get_db()
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE sync_log SET run_end = ?, status = ?, error_message = ? WHERE id = ?",
+                (datetime.utcnow().isoformat(), "error", f"auto:{label}: {e}", sync_id),
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+        return False
+
+
+def _run_auto_sync():
+    """Daily auto-sync entry point: VPI + Patrol + Alarm."""
+    if not all([CONFIG["USERNAME"], CONFIG["PASSWORD"], CONFIG["COMPANY_KEY"]]):
+        logger.warning("Auto-sync skipped: BigChange credentials not configured.")
+        return
+    if _recent_auto_sync_running_or_done():
+        logger.info("Auto-sync skipped: another worker ran it recently.")
+        return
+
+    logger.info("Auto-sync starting.")
+    _do_one_sync("vpi", CONFIG["VPI_JOB_TYPE_ID"], upsert_jobs, refresh_summaries)
+    _do_one_sync("patrol", CONFIG["PATROL_JOB_TYPE_ID"], patrol_upsert_jobs, patrol_refresh_summaries)
+    _do_one_sync("alarm", CONFIG["ALARM_JOB_TYPE_ID"], alarm_upsert_jobs, alarm_refresh_summaries)
+    logger.info("Auto-sync finished.")
+
+
 @app.route('/api/sync', methods=['POST'])
 @csrf.exempt
 @login_required
@@ -2723,6 +2824,172 @@ def get_config():
         "new_flags": CONFIG["NEW_FLAGS"],
         "has_credentials": all([CONFIG["USERNAME"], CONFIG["PASSWORD"], CONFIG["COMPANY_KEY"]])
     })
+
+# ============================================================================
+# VPI SITES ROUTES
+# ============================================================================
+
+@app.route('/sites')
+@login_required
+def sites_index():
+    """Serve the VPI sites dashboard."""
+    return send_from_directory('.', 'sites.html')
+
+
+SITES_SERVICE_TABLES = {
+    "vpi": "jobs_raw",
+    "patrol": "patrol_jobs_raw",
+    "alarm": "alarm_jobs_raw",
+}
+
+
+def _sites_table(service):
+    return SITES_SERVICE_TABLES.get((service or "vpi").lower(), "jobs_raw")
+
+
+def _sites_query_rows(start_date, end_date, service="vpi"):
+    """Aggregate the chosen service's raw table into per-site rows."""
+    table = _sites_table(service)
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        f"""
+        SELECT
+            contact_id,
+            COALESCE(MAX(contact), '')   AS name,
+            COALESCE(MAX(postcode), '')  AS postcode,
+            COALESCE(MAX(location), '')  AS location,
+            MAX(COALESCE(real_end, status_date, created)) AS last_job_date,
+            COUNT(*) AS jobs
+        FROM {table}
+        WHERE contact_id IS NOT NULL
+          AND DATE(created) >= ?
+          AND DATE(created) <= ?
+        GROUP BY contact_id
+        """,
+        [start_date, end_date],
+    )
+    rows = []
+    for r in cursor.fetchall():
+        last = r[4]
+        if last and len(str(last)) >= 16:
+            last = str(last)[:16].replace('T', ' ')
+        rows.append({
+            "contact_id": r[0],
+            "name": r[1] or "",
+            "postcode": (r[2] or "").upper(),
+            "location": r[3] or "",
+            "last_job_date": last or "",
+            "jobs": r[5],
+        })
+    conn.close()
+    return rows
+
+
+@app.route('/api/sites/summary')
+@login_required
+def sites_summary():
+    """Unique-sites summary for the date range, plus per-month series."""
+    start_date = request.args.get('start')
+    end_date = request.args.get('end')
+    service = (request.args.get('service') or 'vpi').lower()
+    if service not in SITES_SERVICE_TABLES:
+        return jsonify({"success": False, "error": "service must be vpi, patrol, or alarm"}), 400
+    if not start_date or not end_date:
+        return jsonify({"success": False, "error": "start and end required"}), 400
+
+    table = _sites_table(service)
+    sites = _sites_query_rows(start_date, end_date, service)
+    sites.sort(key=lambda x: x["last_job_date"], reverse=True)
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        f"""
+        SELECT strftime('%Y-%m', created) AS ym,
+               COUNT(DISTINCT contact_id) AS sites,
+               COUNT(*) AS jobs
+        FROM {table}
+        WHERE contact_id IS NOT NULL
+          AND DATE(created) >= ?
+          AND DATE(created) <= ?
+        GROUP BY ym
+        ORDER BY ym
+        """,
+        [start_date, end_date],
+    )
+    by_month = [{"month": r[0], "sites": r[1], "jobs": r[2]} for r in cursor.fetchall()]
+
+    cursor.execute(
+        f"""
+        SELECT COUNT(DISTINCT contact_id), COUNT(*)
+        FROM {table}
+        WHERE contact_id IS NOT NULL
+          AND DATE(created) >= ?
+          AND DATE(created) <= ?
+        """,
+        [start_date, end_date],
+    )
+    total_sites, total_jobs = cursor.fetchone()
+    conn.close()
+
+    return jsonify({
+        "success": True,
+        "start": start_date,
+        "end": end_date,
+        "service": service,
+        "total_sites": total_sites or 0,
+        "total_jobs": total_jobs or 0,
+        "by_month": by_month,
+        "sites": sites,
+    })
+
+
+@app.route('/api/sites/export')
+@login_required
+def sites_export():
+    """Download an XLSX of sites for the date range."""
+    import io
+    import openpyxl
+    from openpyxl.styles import Font, Alignment
+
+    start_date = request.args.get('start')
+    end_date = request.args.get('end')
+    service = (request.args.get('service') or 'vpi').lower()
+    if service not in SITES_SERVICE_TABLES:
+        return jsonify({"success": False, "error": "service must be vpi, patrol, or alarm"}), 400
+    if not start_date or not end_date:
+        return jsonify({"success": False, "error": "start and end required"}), 400
+
+    sites = _sites_query_rows(start_date, end_date, service)
+    sites.sort(key=lambda x: x["last_job_date"], reverse=True)
+
+    service_label = {"vpi": "VPI", "patrol": "Patrol", "alarm": "Alarm"}[service]
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = f"{service_label} Sites"[:31]
+    headers = ["Site Name", "Contact ID", "Postcode", "Location", "Last Job Date", "Jobs in Window"]
+    ws.append(headers)
+    for c in ws[1]:
+        c.font = Font(bold=True)
+        c.alignment = Alignment(horizontal="left")
+    for r in sites:
+        ws.append([r["name"], r["contact_id"], r["postcode"], r["location"], r["last_job_date"], r["jobs"]])
+    for i, w in enumerate([50, 12, 10, 60, 18, 14], start=1):
+        ws.column_dimensions[chr(64 + i)].width = w
+    ws.freeze_panes = "A2"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    fname = f"{service_label}_sites_{start_date}_to_{end_date}.xlsx"
+    return send_file(
+        buf,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=fname,
+    )
+
 
 # ============================================================================
 # ALARM ACTIVATION ROUTES
@@ -3537,6 +3804,57 @@ def api_onboarding_upload():
 # ============================================================================
 
 init_database()
+
+# ============================================================================
+# SCHEDULER: daily auto-sync at 06:00 and 18:00 UK time
+# ============================================================================
+
+_scheduler = None
+
+
+def _start_scheduler():
+    """Start APScheduler once per process. Uses a file-based lock so only one
+    gunicorn worker actually owns the scheduler — the others skip silently."""
+    global _scheduler
+    if _scheduler is not None:
+        return
+    if os.environ.get("DISABLE_AUTO_SYNC") == "1":
+        logger.info("Auto-sync disabled via DISABLE_AUTO_SYNC env var.")
+        return
+
+    # Cross-worker lock: only one process gets to own the scheduler.
+    import tempfile
+    lock_path = os.path.join(tempfile.gettempdir(), "frg_auto_sync.lock")
+    try:
+        import fcntl
+        lock_file = open(lock_path, "w")
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (BlockingIOError, OSError, ImportError) as e:
+        logger.info("Auto-sync scheduler not started in this worker (%s).", e)
+        return
+
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        import pytz
+    except ImportError:
+        logger.warning("APScheduler not installed; auto-sync disabled.")
+        return
+
+    tz = pytz.timezone("Europe/London")
+    sched = BackgroundScheduler(timezone=tz, daemon=True)
+    sched.add_job(_run_auto_sync, "cron", hour=6, minute=0, id="auto_sync_morning",
+                  misfire_grace_time=3600, coalesce=True, replace_existing=True)
+    sched.add_job(_run_auto_sync, "cron", hour=18, minute=0, id="auto_sync_evening",
+                  misfire_grace_time=3600, coalesce=True, replace_existing=True)
+    sched.start()
+    _scheduler = sched
+    # Hold the lock file open for the lifetime of the process.
+    globals()["_scheduler_lock_file"] = lock_file
+    logger.info("Auto-sync scheduler started (06:00 + 18:00 Europe/London).")
+
+
+_start_scheduler()
+
 
 # ============================================================================
 # MAIN
